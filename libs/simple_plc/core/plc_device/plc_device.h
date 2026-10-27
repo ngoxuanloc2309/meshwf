@@ -1,0 +1,235 @@
+#ifndef PLC_DEVICE_H
+#define PLC_DEVICE_H
+
+/*
+ * plc_device.h - Layer 2 (PLC Core)
+ *
+ * Device identity and runtime health type definitions, per the official
+ * data contract in
+ * docs/SimplePLC_App_MCU_Structs_v2.0_Self_Describing_Profile.md, section
+ * 3.1 (SPLC_DeviceDescriptor_t) and 3.3 (SPLC_DeviceHealth_t,
+ * 0x0800-0x0809). SPLC_DeviceDescriptor and SPLC_DeviceHealth are
+ * unchanged between v1.7/v1.9/v2.0 (same 20-byte layout) -- V2.0 only adds
+ * new register blocks elsewhere (RTC, Diagnostic Control, Function
+ * Blocks), it does not change these two structs. This file must not
+ * include anything from Layer 0/1
+ * (platform or driver headers). This is the porting boundary: Layer 2 must
+ * build and unit test on a plain PC toolchain, independent of any real
+ * hardware.
+ *
+ * Scope of this file: struct/enum type definitions only, nothing else.
+ * There is deliberately no plc_device.c and no extern g_device_descriptor /
+ * g_device_health here. Owning the actual instances and populating them
+ * (from Flash-stored HW version, compile-time FW version, board init, and
+ * the live scan loop for health) requires calling into Layer 0/1, which
+ * Layer 2 is not allowed to do -- the same boundary plc_tag.h documents for
+ * tag_table_load_from_flash(). That ownership belongs one layer up (Layer
+ * 3/4, e.g. services/ or app/plc_app/plc_engine.c), which is free to
+ * #include this header for the type definitions and then declare/populate
+ * its own g_device_descriptor / g_device_health instances.
+ *
+ * This file replaces the earlier drafts left in app/splc_app_config.h and
+ * board/board_family.h, which put device-identity data outside the Layer 2
+ * porting boundary. Those drafts have been removed; this is the single
+ * source for SPLC_DeviceClass / SPLC_*Variant / SPLC_DeviceDescriptor /
+ * SPLC_DeviceHealth.
+ *
+ * See docs/architecture.md, section 2, "Layer 2 - PLC Core".
+ */
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*
+ * Device class: top-level product family.
+ *
+ * NOTE: this used to be modeled as compile-time #define / #ifdef in the
+ * removed board/board_family.h draft ("#ifdef SPLC_DEVICE_CLASS_REMOTE_IO").
+ * That does not work: the macro was always #define'd (just to 0 or 1), so
+ * #ifdef was always true and every variant enum got compiled in at once,
+ * regardless of which SKU the firmware was built for. SPLC_DeviceClass is
+ * runtime data carried in SPLC_DeviceDescriptor.device_class, set once by
+ * the concrete board's init code (Layer 4) -- it does not need, and must
+ * not use, conditional compilation.
+ */
+typedef enum {
+    SPLC_DEVICE_CLASS_UNKNOWN    = 0,
+    SPLC_DEVICE_CLASS_REMOTE_IO  = 1,
+    SPLC_DEVICE_CLASS_DATALOGGER = 2,
+    SPLC_DEVICE_CLASS_GATEWAY    = 3,
+    SPLC_DEVICE_CLASS_CONTROLLER = 4
+} SPLC_DeviceClass;
+
+/* Remote I/O variant: only meaningful when device_class == SPLC_DEVICE_CLASS_REMOTE_IO. */
+typedef enum {
+    SPLC_REMOTE_IO_VARIANT_UNKNOWN     = 0,
+    SPLC_REMOTE_IO_VARIANT_8DI_8DO_4AI = 1,
+    SPLC_REMOTE_IO_VARIANT_16DI_16DO   = 2,
+    SPLC_REMOTE_IO_VARIANT_4DI_4DO     = 3
+} SPLC_RemoteIoVariant;
+
+/* Datalogger variant: only meaningful when device_class == SPLC_DEVICE_CLASS_DATALOGGER. */
+typedef enum {
+    SPLC_DATALOGGER_VARIANT_UNKNOWN = 0,
+    SPLC_DATALOGGER_VARIANT_8AI     = 1
+} SPLC_DataloggerVariant;
+
+/* Gateway variant: only meaningful when device_class == SPLC_DEVICE_CLASS_GATEWAY. */
+typedef enum {
+    SPLC_GATEWAY_VARIANT_UNKNOWN   = 0,
+    SPLC_GATEWAY_VARIANT_RS485_ETH = 1
+} SPLC_GatewayVariant;
+
+/*
+ * Descriptor the App reads right after connecting. Read-only from the App's
+ * point of view; not user configuration.
+ *
+ * HW/FW versions display as major.minor.patch, e.g. 1.1.0 / 1.3.2.
+ *
+ * Wire size: 20 bytes (10 x uint16_t). Mirrors
+ * docs/SimplePLC_App_MCU_Structs_v1.7.md section 1 exactly -- do not reorder
+ * or resize fields without updating that document first.
+ */
+typedef struct {
+    uint16_t device_class;         /* SPLC_DeviceClass */
+    uint16_t device_variant;       /* Variant enum matching device_class (SPLC_RemoteIoVariant / SPLC_DataloggerVariant / SPLC_GatewayVariant) */
+
+    uint16_t hw_version_major;     /* HW major */
+    uint16_t hw_version_minor;     /* HW minor */
+    uint16_t hw_version_patch;     /* HW patch */
+
+    uint16_t fw_version_major;     /* FW major */
+    uint16_t fw_version_minor;     /* FW minor */
+    uint16_t fw_version_patch;     /* FW patch */
+
+    uint16_t protocol_version;     /* App <-> MCU contract version */
+    uint16_t rule_format_version;  /* SPLC_RuleRecord layout/semantic version */
+} SPLC_DeviceDescriptor; /* 20 bytes */
+
+/* Main reason for the last reset. Only one value at a time (not a bitmask). */
+typedef enum {
+    SPLC_RESET_UNKNOWN  = 0,
+    SPLC_RESET_POWER_ON = 1,
+    SPLC_RESET_SOFTWARE = 2,
+    SPLC_RESET_WATCHDOG = 3,
+    SPLC_RESET_BROWNOUT = 4,
+    SPLC_RESET_EXTERNAL = 5
+} SPLC_ResetReason;
+
+/*
+ * Health bitmask: multiple flags may be OR'd together.
+ * SPLC_HEALTH_NONE (0) means no health warnings are active.
+ */
+typedef enum {
+    SPLC_HEALTH_NONE         = 0,
+    SPLC_HEALTH_CPU_HIGH     = 1 << 0,
+    SPLC_HEALTH_RAM_HIGH     = 1 << 1,
+    SPLC_HEALTH_SCAN_OVERRUN = 1 << 2
+} SPLC_HealthFlags;
+
+/*
+ * Runtime health snapshot, updated continuously by Layer 3/4 and exposed
+ * read-only over Modbus at DEVICE_HEALTH (0x0800-0x0809).
+ *
+ * Unit confirmed: scan_time_ms / max_scan_time_ms are milliseconds, matching
+ * the field name. (The source docx, SimplePLC_App_MCU_Structs_v1.7, had a
+ * stray "microsecond" comment next to the _ms name, and docs/architecture.md
+ * separately named these fields scan_time_us / max_scan_time_us -- both were
+ * inconsistent with the field name itself. Confirmed with the spec owner:
+ * milliseconds is correct: docs/architecture.md's *_us naming should be
+ * treated as stale.)
+ *
+ * Wire size: 20 bytes.
+ */
+typedef struct {
+    uint32_t uptime_s;          /* Seconds since last boot */
+    uint16_t reset_reason;      /* SPLC_ResetReason */
+    uint16_t health_flags;      /* Bitmask of SPLC_HealthFlags */
+
+    uint16_t cpu_load_percent;  /* 0-100 */
+    uint16_t ram_usage_percent; /* 0-100 */
+
+    uint32_t scan_time_ms;      /* Last scan duration, in milliseconds */
+    uint32_t max_scan_time_ms;  /* Max scan duration observed, in milliseconds */
+} SPLC_DeviceHealth; /* 20 bytes */
+
+/*
+ * Wire profile identifies the layout/tag-addressing contract that App and
+ * MCU both understand.
+ *
+ * SPLC_WIRE_PROFILE_V1: v1.9 baseline (frozen) -- DeviceDescriptor,
+ * DeviceResourceInfo, ActiveRuleTable, DeviceHealth, RuntimeTagValues
+ * (read-only), SystemCommand.
+ *
+ * SPLC_WIRE_PROFILE_V2: v2.0 superset (SimplePLC_Wire_Contract_V2_Draft.md)
+ * -- adds RTC (0x0810), Diagnostic Control Block (0x0A20, lease-based
+ * runtime tag writes to DO/VFLAG/VREG/VREG_RETAIN/COUNTER), and the
+ * Function Block Timer/Counter subsystem (0x0B00/0x0B40). 100% backward
+ * compatible with V1 register layout -- V2 only adds new register ranges,
+ * never changes existing ones.
+ */
+typedef enum {
+    SPLC_WIRE_PROFILE_UNKNOWN = 0,
+    SPLC_WIRE_PROFILE_V1      = 1,
+    SPLC_WIRE_PROFILE_V2      = 2
+} SPLC_WireProfile;
+
+/*
+ * V1.9 addition (did not exist in v1.7): self-describing resource profile.
+ * The App reads this right after SPLC_DeviceDescriptor and uses it to
+ * build its own ProductDefinition/TagCatalog at runtime, instead of
+ * looking up resources by device_variant. Wire Profile V1 (wire_profile ==
+ * SPLC_WIRE_PROFILE_V1) always provides Runtime Tags, Device Health, and
+ * System Commands -- there is no capability bitmask for those. Rule
+ * Engine presence is inferred from max_rules > 0; Retentive Memory
+ * presence is inferred from vreg_retain_count > 0.
+ *
+ * Wire size: 20 bytes (10 x uint16_t), exposed read-only at
+ * DEVICE_RESOURCE_INFO (0x0020-0x0029).
+ */
+typedef struct {
+    uint16_t wire_profile;       /* SPLC_WireProfile; V1 = 1 */
+    uint16_t max_rules;          /* 0..100; >0 => Rule Engine present */
+    uint16_t runtime_tag_count;  /* Total valid tags; NOT necessarily a contiguous 0..N-1 range */
+
+    uint16_t di_count;           /* 0..8 */
+    uint16_t do_count;           /* 0..8 */
+    uint16_t ai_count;           /* 0..4 */
+    uint16_t vflag_count;        /* 0..32 */
+    uint16_t vreg_count;         /* 0..32 */
+    uint16_t vreg_retain_count;  /* 0..32; >0 => Retentive Memory present */
+    uint16_t counter_count;      /* 0..8 */
+} SPLC_DeviceResourceInfo; /* 20 bytes */
+
+/*
+ * Real-Time Clock block (V2.0, Structs doc section 3.4), 0x0810..0x0813:
+ *   epoch_utc_s (u32, High Word first), tz_offset_min (i16), status_flags.
+ * status_flags is READ-ONLY on the wire: the firmware computes it on every
+ * read (see services/plc_rtc/plc_rtc.h). A Host that still sends a 4th
+ * register has it ignored.
+ */
+typedef enum {
+    SPLC_RTC_FLAG_SYNCED      = 0x0001, /* a Host has set the time since the clock lost power */
+    SPLC_RTC_FLAG_HW_PRESENT  = 0x0002, /* dedicated RTC IC or 32.768 kHz crystal fitted */
+    SPLC_RTC_FLAG_BATTERY_LOW = 0x0004  /* RTC backup battery weak (no board reports it yet) */
+} SPLC_RtcFlags;
+
+/*
+ * Clock hardware of a given board, filled once at boot by board_<sku>.c
+ * (same pattern as g_device_resource_info). Zero-initialised = "internal
+ * RTC only, no crystal, no battery".
+ */
+typedef struct {
+    bool hw_present;
+} SPLC_RtcCaps;
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PLC_DEVICE_H */

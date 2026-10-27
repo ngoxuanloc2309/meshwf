@@ -1,0 +1,183 @@
+#ifndef PLC_TAG_H
+#define PLC_TAG_H
+
+/*
+ * plc_tag.h - Layer 2 (PLC Core)
+ *
+ * Tag Table: unified abstraction for every I/O point and internal variable
+ * in the system. This file must not include anything from Layer 0/1
+ * (platform or driver headers). This is the porting boundary: Layer 2 must
+ * build and unit test on a plain PC toolchain, independent of any real
+ * hardware.
+ *
+ * See docs/architecture.md, section 2, "Layer 2 - PLC Core".
+ */
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Maximum number of tags supported system-wide = size of g_tag_table[] and
+ * g_tag_value[]. MAX_TAGS is defined per board in board/board_tag_define.h
+ * (112 for BOARD_ZIGBEE_IO_4DI_4DO, 128 for BOARD_REMOTE_IO_8DI_8DO); this
+ * header only pulls it in. The wire capacity is still 128 tags
+ * (docs/SimplePLC_App_MCU_Structs_v2.0_Self_Describing_Profile.md: Runtime
+ * tag window 0x0900..0x09FF); a board uses fewer -- see
+ * SPLC_DeviceResourceInfo.runtime_tag_count.
+ *
+ * NOTE: this makes Layer 2 depend on a Layer 4 header at compile time (include
+ * path only, no link dependency). core/CMakeLists.txt adds ../board to
+ * splc_core's include path for this. */
+#include "board_tag_define.h"
+
+/* TagKind identifies what a tag represents. It does not carry any live
+ * value; live values live in g_tag_value[] instead.
+ *
+ * Numeric values are pinned explicitly per
+ * docs/SimplePLC_App_MCU_Structs_v1.9_Self_Describing_Profile.md section
+ * 1.2 ("Chuẩn hóa numeric value để Domain/App và firmware/spec không lệch
+ * mã"). Do not rely on implicit enum auto-increment here -- a future
+ * insertion in the middle would silently renumber every kind after it. */
+typedef enum {
+    TAG_NONE         = 0,  /* Unused slot */
+    TAG_DI           = 1,  /* Digital input; only input_scan() may write it */
+    TAG_DO           = 2,  /* Digital output; output_scan() reads it to drive a pin */
+    TAG_AI           = 3,  /* Analog input; only input_scan() may write it */
+    TAG_VFLAG        = 4,  /* Internal virtual flag, no physical pin backing it */
+    TAG_VREG         = 5,  /* Internal virtual register, not retained across power loss */
+    TAG_MB_COIL      = 6,  /* Coil on a remote Modbus device (future Gateway SKU) */
+    TAG_MB_HOLDING   = 7,  /* Holding register on a remote Modbus device */
+    TAG_VREG_RETAIN  = 8,  /* Virtual register retained through Flash snapshot */
+    TAG_COUNTER      = 9,  /* V1.9: dedicated counter tag, incremented by SPLC_ACT_INC_COUNTER */
+} SPLC_TagKind;
+
+/*
+ * Tag describes the meaning of a single slot. It is metadata only and does
+ * not hold a live value. It is loaded once at boot and never changes at
+ * runtime.
+ *
+ * Size: 4 bytes per tag.
+ */
+typedef struct {
+    uint8_t  kind;      /* One of SPLC_TagKind */
+    uint8_t  channel;   /* Local physical channel, unused for VFLAG/VREG */
+    uint16_t reg_addr;  /* Only meaningful for TAG_MB_COIL / TAG_MB_HOLDING */
+} SPLC_Tag;
+
+/* Tag metadata table. Populated once at boot, read-only afterwards. */
+extern SPLC_Tag g_tag_table[MAX_TAGS];
+
+/*
+ * Live value table. This is the single shared RAM area written and read
+ * by input_scan(), rule_scan(), output_scan(), and modbus_config_service().
+ * External code must never touch this array directly; all access must go
+ * through tag_read()/tag_write().
+ */
+extern int32_t g_tag_value[MAX_TAGS];
+
+/*
+ * SPLC_TagLayout describes how many tags of each kind a given board wants,
+ * in wire order (DI, then DO, then AI, then VFLAG, VREG, VREG_RETAIN,
+ * COUNTER -- same group order as
+ * docs/SimplePLC_App_MCU_Structs_v1.9_Self_Describing_Profile.md section
+ * 5.1's fixed wire layout). Layer 2 does not know or assume any concrete
+ * numbers itself -- every board (Layer 4, board/board_tag_define.h) supplies
+ * its own SPLC_TagLayout to tag_table_load_from_flash() below. This is what
+ * lets a new board be added by writing a new Layer 4 file only, without
+ * touching this file or any other Layer 2 code.
+ *
+ * The sum of every field here must not exceed MAX_TAGS; any remainder is
+ * left as TAG_NONE (unused, reserved slots -- e.g. a future Gateway SKU's
+ * TAG_MB_COIL/TAG_MB_HOLDING range).
+ */
+typedef struct {
+    uint16_t di_count;
+    uint16_t do_count;
+    uint16_t ai_count;
+    uint16_t vflag_count;
+    uint16_t vreg_count;
+    uint16_t vreg_retain_count;
+    uint16_t counter_count;
+} SPLC_TagLayout;
+
+/*
+ * Load the tag metadata table (g_tag_table[]) from Flash. Called exactly
+ * once at boot, from plc_engine_init() (Layer 4), AFTER the caller has
+ * already obtained this board's SPLC_TagLayout (e.g. via
+ * board_get_tag_layout(), board/splc_board.h) -- Layer 2 itself never decides
+ * how many DI/DO/AI/... slots exist, it only lays them out contiguously in
+ * the fixed group order above, starting at index 0, according to what
+ * `layout` says.
+ *
+ * layout: this board's tag counts, supplied by Layer 4. Must outlive this
+ *         call only (its contents are copied field-by-field into internal
+ *         static offsets below; no pointer to it is retained).
+ *
+ * Implementation note: reading Flash requires a platform-provided function.
+ * This file must stay free of any Layer 0/1 include; the actual Flash
+ * access is expected to be injected via a function pointer or a thin
+ * wrapper supplied from Layer 3/4. See the TODO in plc_tag.c.
+ */
+void tag_table_load_from_flash(const SPLC_TagLayout *layout);
+
+/*
+ * Base-index getters: return where each tag group starts in g_tag_table[],
+ * according to the SPLC_TagLayout most recently passed to
+ * tag_table_load_from_flash(). Layer 3/4 code that used to rely on a fixed
+ * #define (e.g. the old core/plc_tag/plc_tag_def.h's TAG_VREG_R0) must call
+ * the matching getter instead, since a group's offset now shifts depending
+ * on how many DI/DO/AI a given board has ahead of it.
+ *
+ * tag_di_base_index() is always 0 (DI is always the first group per the
+ * fixed wire layout) -- provided anyway for symmetry, so callers never need
+ * to special-case DI as "the one group that doesn't need a getter".
+ *
+ * Undefined/meaningless before the first tag_table_load_from_flash() call.
+ */
+uint16_t tag_di_base_index(void);
+uint16_t tag_do_base_index(void);
+uint16_t tag_ai_base_index(void);
+uint16_t tag_vflag_base_index(void);
+uint16_t tag_vreg_base_index(void);
+uint16_t tag_vreg_retain_base_index(void);
+uint16_t tag_counter_base_index(void);
+
+/*
+ * Read the current value of a tag. The caller does not need to know, and
+ * this function does not check, whether idx refers to a DI, DO, AI, or any
+ * other kind.
+ *
+ * idx: tag index, valid range 0 .. MAX_TAGS - 1
+ * returns: the value currently stored in g_tag_value[idx]
+ */
+int32_t tag_read(uint16_t idx);
+
+/*
+ * Write a value to a tag. This only updates RAM and never triggers any
+ * further action (pull model, not push model; see docs/architecture.md
+ * section 6). Whether this value is later reflected on a physical pin is
+ * entirely the responsibility of output_scan() (Layer 3), which runs
+ * independently on a fixed schedule.
+ *
+ * idx:   tag index, valid range 0 .. MAX_TAGS - 1
+ * value: new value to store
+ */
+void tag_write(uint16_t idx, int32_t value);
+
+/*
+ * Return the SPLC_TagKind of a given tag. Used by Layer 3 when it needs to
+ * know a tag's meaning before mapping it to hardware (e.g. building the
+ * list of tags that are of kind TAG_DO).
+ *
+ * idx: tag index, valid range 0 .. MAX_TAGS - 1
+ * returns: one of SPLC_TagKind
+ */
+SPLC_TagKind tag_get_kind(uint16_t idx);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PLC_TAG_H */

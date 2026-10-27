@@ -1,0 +1,4 @@
+mcu:SAMD11
+mcu:SAMG
+family:espressif
+mcu:CH583
