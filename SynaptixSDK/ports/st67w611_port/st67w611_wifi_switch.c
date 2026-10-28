@@ -35,15 +35,21 @@ st67w611_status_t meshwf_st67_wifi_switch(const char *ssid, const char *password
     switch (state) {
     case ST67W611_STATE_READY:
         break;
-    case ST67W611_STATE_CONNECTING:
     case ST67W611_STATE_CONNECTED:
-    case ST67W611_STATE_ERROR:
-        /* After a failed connect the module is alive but may still be
-         * mid-join; a refused disconnect is reported and nothing else runs. */
+        /* A link is up: if it cannot be dropped, do not start a second join. */
         rc = st67w611_disconnect();
         if (rc != ST67W611_OK) {
             return rc;
         }
+        break;
+    case ST67W611_STATE_CONNECTING:
+    case ST67W611_STATE_ERROR:
+        /* Best effort. After a failed join (wrong password, AP gone) the vendor
+         * station is already DISCONNECTED and refuses a disconnect, so a refusal
+         * here is expected and is not an error; st67w611_connect() accepts the
+         * ERROR state. If the station really is still joined (e.g. DHCP
+         * timeout) the disconnect succeeds and the state returns to READY. */
+        (void)st67w611_disconnect();
         break;
     default:
         return ST67W611_ERR_INVALID_STATE;

@@ -302,6 +302,80 @@ st67w611_status_t st67w611_reset(void)
     return result;
 }
 
+st67w611_status_t st67w611_soft_reset(void)
+{
+    st67w611_state_t previous;
+    st67w611_status_t result = ST67W611_OK;
+    W6X_Status_t vendor_status;
+
+    if (!lock_operation()) return ST67W611_ERR_BUSY;
+    if (state == ST67W611_STATE_OFF) { unlock_operation(); return ST67W611_ERR_NOT_INITIALIZED; }
+    /* INITIALIZING/RESETTING: another lifecycle step owns the module.
+     * !started: the vendor driver is de-initialised (e.g. after a failed
+     * st67w611_reset()); only st67w611_init()/start can recover that. */
+    if (state == ST67W611_STATE_INITIALIZING || state == ST67W611_STATE_RESETTING) {
+        unlock_operation();
+        return ST67W611_ERR_INVALID_STATE;
+    }
+    if (!started) { unlock_operation(); return ST67W611_ERR_NOT_READY; }
+    if (scan_active) { unlock_operation(); return ST67W611_ERR_BUSY; }
+
+    previous = state;
+    diagnostics.reset_count++;
+    set_state(ST67W611_STATE_RESETTING, ST67W611_OK);
+
+    if (config.lifecycle != NULL &&
+        config.lifecycle->before_transport_restart != NULL) {
+        result = config.lifecycle->before_transport_restart(config.lifecycle->context);
+        if (result != ST67W611_OK) {
+            set_state(ST67W611_STATE_ERROR, result);
+            unlock_operation();
+            return result;
+        }
+    }
+
+    /* AT+RST: no EN pin needed. The vendor saves the power-save mode, de-inits
+     * Wi-Fi (and Net on T01), reboots the module, waits for ready and restores
+     * them. A module that does not answer AT fails at the first command and
+     * nothing is changed (retry-safe); only the EN pin can recover that. */
+    vendor_status = W6X_Reset(0U);
+    if (vendor_status == W6X_STATUS_OK) {
+        vendor_status = W6X_WiFi_Station_Start();   /* the reboot drops station mode */
+    }
+    if (vendor_status != W6X_STATUS_OK) {
+        diagnostics.vendor_error_count++;
+        result = map_status(vendor_status);
+        if (result == ST67W611_OK) result = ST67W611_ERR_VENDOR;
+        set_state(ST67W611_STATE_ERROR, result);
+        unlock_operation();
+        publish(ST67W611_EVENT_ERROR, NULL);
+        return result;
+    }
+
+    if (config.lifecycle != NULL &&
+        config.lifecycle->after_transport_restart != NULL) {
+        result = config.lifecycle->after_transport_restart(config.lifecycle->context);
+        if (result != ST67W611_OK) {
+            set_state(ST67W611_STATE_ERROR, result);
+            unlock_operation();
+            publish(ST67W611_EVENT_ERROR, NULL);
+            return result;
+        }
+    }
+
+    /* The reboot ends any link. The vendor may not raise DISCONNECTED for it. */
+    if (previous == ST67W611_STATE_CONNECTED || previous == ST67W611_STATE_CONNECTING) {
+        diagnostics.disconnect_count++;
+    }
+    set_state(ST67W611_STATE_READY, ST67W611_OK);
+    unlock_operation();
+    if (previous == ST67W611_STATE_CONNECTED || previous == ST67W611_STATE_CONNECTING) {
+        publish(ST67W611_EVENT_DISCONNECTED, NULL);
+    }
+    publish(ST67W611_EVENT_READY, NULL);
+    return ST67W611_OK;
+}
+
 st67w611_status_t st67w611_connect(const char *ssid, const char *password)
 {
     W6X_WiFi_Connect_Opts_t options = {0};
@@ -310,7 +384,17 @@ st67w611_status_t st67w611_connect(const char *ssid, const char *password)
     size_t len;
     if (!lock_operation()) return ST67W611_ERR_BUSY;
     if (ssid == NULL) { unlock_operation(); return ST67W611_ERR_INVALID_ARG; }
-    if (state != ST67W611_STATE_READY) { unlock_operation(); return ST67W611_ERR_INVALID_STATE; }
+    /* READY: normal case. ERROR with the driver still started: a failed join
+     * (wrong password, AP gone) leaves the vendor station DISCONNECTED, so
+     * st67w611_disconnect() is refused and could never bring the state back to
+     * READY; the vendor W6X_WiFi_Connect() does its own state checks. ERROR
+     * with !started (failed hardware reset) is NOT allowed: the vendor driver
+     * is de-initialised. */
+    if (state != ST67W611_STATE_READY &&
+        !(state == ST67W611_STATE_ERROR && started)) {
+        unlock_operation();
+        return ST67W611_ERR_INVALID_STATE;
+    }
     if (scan_active) { unlock_operation(); return ST67W611_ERR_BUSY; }
     len = bounded_strlen(ssid, sizeof(options.SSID));
     if (len >= sizeof(options.SSID)) { unlock_operation(); return ST67W611_ERR_INVALID_ARG; }

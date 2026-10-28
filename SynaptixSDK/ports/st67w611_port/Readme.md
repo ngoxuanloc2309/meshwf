@@ -2,7 +2,7 @@
 
 Cài đặt `st67w611_port_ops_t` của `libs/st67w611` (lấy từ repo `wg_ue`) trên SPI1.
 Truyền SPI và chân CS đi qua `sx_spi` của simple_plc (`SynaptixSDK/libs/simple_plc`); RDY (EXTI), WAKEUP, EN, BOOT và đường DMA tuỳ chọn vẫn gọi HAL vì `sx_spi`/`sx_gpio` chưa có ngắt và DMA.
-Không sửa file CubeMX nào. Lõi vendor (`x-cube-st67w61`, `libs/st67w611`) chưa nằm trong repo này.
+Không sửa file CubeMX nào. Lõi vendor (`libs/x-cube-st67w61`) và facade `libs/st67w611` nằm trong repo này. Dùng chế độ AT (không lwIP): `ST67W611_ARCH=T01`.
 
 ## File
 | File | Việc |
@@ -10,6 +10,9 @@ Không sửa file CubeMX nào. Lõi vendor (`x-cube-st67w61`, `libs/st67w611`) c
 | `st67w611_spi_port.h` | API công khai: `meshwf_st67_port_ops`, `meshwf_st67_port_on_rdy_edge()`, `meshwf_st67_port_get_pins()` |
 | `st67w611_spi_port_conf.h` | Đấu chân và tuỳ chọn (mọi macro đều ghi đè được bằng `-D` hoặc `ST67_PORT_USER_CONF`) |
 | `st67w611_spi_port.c` | Cài đặt |
+| `st67w611_wifi_switch.{c,h}` | `meshwf_st67_wifi_switch(ssid, pw)`: đổi AP. Kiểm tham số TRƯỚC khi ngắt link; READY nối thẳng; CONNECTED ngắt rồi nối (ngắt lỗi thì trả lỗi, không nối); CONNECTING/ERROR cố ngắt, bỏ qua lỗi từ chối rồi nối |
+| `st67w611_soft_reset.{c,h}` | `meshwf_st67_soft_reset()`: bọc mỏng `st67w611_soft_reset()` của facade (AT+RST, không cần chân EN) |
+| `CMakeLists.txt` | Target `st67w611_port` (chưa cấu hình thử, top-level chưa add SynaptixSDK) |
 
 ## Dùng
 ```c
@@ -30,6 +33,10 @@ Thêm `st67w611_spi_port.c` vào target, include dir của port + `libs/st67w611
 | SPI1 chưa gắn DMA (GPDMA ch0/1 đang của USART2) | `transfer_dma()` chạy polling rồi báo hoàn tất ngay (vendor chấp nhận) | `ST67_SPI_USE_DMA=1` sau khi gắn 2 kênh GPDMA cho SPI1_TX/RX trong CubeMX |
 | Không có chân EN / BOOT | Đặt nhãn `ST67_EN` / `ST67_BOOT` cho chân đó trong CubeMX thì port tự dùng; thiếu EN thì `hardware_reset()` trả `-1` | |
 
+**Board này không có EN ⇒ KHÔNG gọi `st67w611_reset()`** (nó `W6X_DeInit` rồi hardware reset thất bại, driver dừng hẳn và `start` không chạy lại được). Dùng `st67w611_soft_reset()`. Module treo cứng không trả lời AT thì chỉ chân EN cứu được.
+
+**Chân PB1 `ST67W_32K`:** module đã có thạch anh ngoài nên không cần xung 32 kHz từ MCU; port không dùng chân này.
+
 CS tích cực mức CAO (giống mẫu ST và `wg_ue`), khoảng nghỉ tối thiểu 2 µs giữa hai lần chọn, chờ 20 µs sau khi chọn — do `sx_spi_select/deselect` thực hiện (đếm bằng DWT; nếu DWT không chạy thì dùng vòng NOP, không treo).
 Vì `sx_spi` chỉ có buffer dummy 256 B nên port vẫn giữ `s_zeros`/`s_sink` 2 KB để truyền RX-only/TX-only tới `ST67_SPI_MAX_XFER`.
 
@@ -40,9 +47,9 @@ Vì `sx_spi` chỉ có buffer dummy 256 B nên port vẫn giữ `s_zeros`/`s_sin
 ## CHƯA kiểm / chưa biết (không thể kiểm khi không có board)
 - Chạy thật trên board: chưa. Mọi thứ trên là mô hình giả của HAL.
 - Chân EN/RESET/BOOT của ST67 trên PCB (chưa có trong `.ioc`). Thiếu EN ⇒ không reset được module bằng phần cứng.
-- PB1 `ST67W_32K` đang là GPIO output thường, **không phát được xung**. Nếu module cần xung 32 kHz từ MCU thì phải chuyển sang chân timer/LSCO.
 - Tốc độ SPI: CubeMX đặt prescaler 4 (16 MHz); `wg_ue` đang chạy prescaler 128 trên H563. Chưa biết 16 MHz có ổn trên PCB này.
 - Cực CS và độ trễ 20 µs lấy từ ST/`wg_ue`, chưa đo trên PCB này.
 - Với `ST67_SPI_USE_DMA=0`: `libs/st67w611/port/src/st67w611_vendor_bridge.c` khởi động timer 500 ms sau mỗi `transfer_dma` thành công. Nếu timer hết hạn đúng lúc một `transfer_dma` khác đang chạy (cỡ 1 ms với khung 2 KB), bridge sẽ huỷ nhầm và đánh dấu peer lỗi. Xác suất thấp, biến mất khi dùng DMA thật.
-- Chưa nối vào CMake và chưa link với vendor (vendor chưa có trong repo; mới biên dịch với header của `wg_ue/libs/st67w611`).
+- Chưa nối vào CMake gốc, chưa link toàn bộ firmware (mới `-fsyntax-only` ARM từng file với vendor thật, `ST67_ARCH` 1 và 2).
+- `st67w611_soft_reset()` / connect-sau-lỗi / `meshwf_st67_wifi_switch` mới chạy trên mô hình giả (vendor + RTOS giả, PC); chưa chạy module thật. Chưa biết: callback `APP_wifi_cb` còn nguyên sau `W6X_Reset` không; sau sai mật khẩu vendor có phát thêm DISCONNECTED không.
 - `ST67_SPI_CLOCK_HZ`: khi khác 0, mode/bit order lấy từ `ST67_SPI_MODE` (mặc định mode 0, MSB) — khớp CubeMX hiện tại, chưa kiểm với module thật.

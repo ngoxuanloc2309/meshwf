@@ -12,10 +12,17 @@
  *
  * Behaviour:
  *  - READY                      : connect directly.
- *  - CONNECTING/CONNECTED/ERROR : disconnect first, then connect.
+ *  - CONNECTED                  : disconnect first (a refusal is returned and
+ *                                 nothing else runs), then connect.
+ *  - CONNECTING/ERROR           : try to disconnect, ignore a refusal (after a
+ *                                 failed join the vendor has nothing to
+ *                                 disconnect), then connect.
  *  - OFF/INITIALIZING/RESETTING : ST67W611_ERR_INVALID_STATE, nothing is done.
  * If the new connect fails the module stays disconnected (state ERROR); the
- * caller may call this function again, with the new or the old credentials.
+ * caller may call this function again, with the new or the old credentials
+ * (needs the st67w611_connect() that accepts ERROR with the driver started).
+ * With the driver not started (failed hardware reset) it returns
+ * ST67W611_ERR_INVALID_STATE from connect.
  * Blocking (as st67w611_connect); call from a task, not from an ISR.
  * Not reentrant: the caller must serialise calls (the library itself returns
  * ST67W611_ERR_BUSY while one of its operations is running). */

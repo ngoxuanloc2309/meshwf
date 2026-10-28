@@ -150,6 +150,11 @@ st67w611_status_t st67w611_init(const st67w611_config_t *config);
 st67w611_status_t st67w611_start(void);
 st67w611_status_t st67w611_stop(void);
 st67w611_status_t st67w611_reset(void);
+/* AT+RST of the module through the vendor driver; needs NO EN pin. Keeps the
+ * driver started, drops the AP link, ends in READY (or ERROR; retry-safe).
+ * Allowed in READY/CONNECTING/CONNECTED/ERROR while started. Calls the
+ * lifecycle hooks like st67w611_reset(). Blocking (seconds), task context only. */
+st67w611_status_t st67w611_soft_reset(void);
 st67w611_status_t st67w611_connect(const char *ssid, const char *password);
 st67w611_status_t st67w611_disconnect(void);
 st67w611_status_t st67w611_get_state(st67w611_state_t *state);

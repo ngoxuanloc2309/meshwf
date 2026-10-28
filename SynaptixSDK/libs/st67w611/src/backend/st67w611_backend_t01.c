@@ -1,4 +1,5 @@
 #include "st67w611_backend.h"
+#include <string.h>
 #include "w6x_api.h"
 
 st67w611_status_t st67w611_backend_start(void)

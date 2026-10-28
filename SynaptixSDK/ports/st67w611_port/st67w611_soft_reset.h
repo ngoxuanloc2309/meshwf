@@ -3,36 +3,22 @@
 
 /* Soft reset (AT+RST) of the ST67W611 for boards WITHOUT an EN pin.
  *
- * libs/st67w611 and the vendor driver are not modified. The facade has no
- * soft reset (st67w611_reset() only calls the port's hardware_reset hook and
- * runs W6X_DeInit first, which is unsafe without EN), so this calls the vendor
- * W6X_Reset(0) directly.
+ * Thin wrapper of st67w611_soft_reset() (libs/st67w611). The facade owns the
+ * operation lock and the state machine, so the reset is serialised against
+ * connect/disconnect/scan by the library itself and the state ends READY.
  *
- * Sequence:
- *   1. st67w611_disconnect()  - facade state becomes READY (it matches the
- *                               module state after the reboot, which has no link).
- *   2. W6X_Reset(0)           - AT+RST, wait ready, vendor re-inits Wi-Fi (and
- *                               Net on T01). Retry-safe: on failure the vendor
- *                               keeps its pending-state backup, so calling again
- *                               just repeats AT+RST.
- *   3. W6X_WiFi_Station_Start() - the reboot drops the station mode.
- * Afterwards connect with meshwf_st67_wifi_switch().
+ * Do NOT use st67w611_reset() on a board without EN: it de-initialises the
+ * vendor driver before its hardware reset fails and leaves the driver stopped.
  *
  * What it can NOT do: recover a module that is hung hard and does not answer
- * AT commands (W6X_Reset fails at its first AT command and changes nothing).
- * Only the EN pin can. Without a hardware reset path, report the error to the PLC.
+ * AT commands (the vendor reset fails at its first AT command and changes
+ * nothing; state ERROR, retry-safe). Only the EN pin can. Report the error.
  *
- * Caller contract: the facade's internal lock and scan flag are private, so the
- * caller must serialise this call with every other Wi-Fi call (use one Wi-Fi
- * task). Blocking (seconds); never from an ISR. All sockets/MQTT sessions and
- * the AP link are lost. Power save is not touched (the vendor reset saves and
- * restores whatever mode was set).
+ * Blocking (seconds), task context only. All sockets/MQTT sessions and the AP
+ * link are lost; connect again with meshwf_st67_wifi_switch().
  *
- * Return: OK, INVALID_STATE (OFF/INITIALIZING/RESETTING), BUSY, TIMEOUT,
- * VENDOR. If the disconnect step fails while in ERROR state the reset is still
- * attempted (that is the recovery case); the facade then stays in ERROR until
- * meshwf_st67_wifi_switch() (which disconnects first) or st67w611_disconnect()
- * succeeds. */
+ * Return: st67w611_soft_reset() codes (OK, NOT_INITIALIZED, INVALID_STATE,
+ * NOT_READY, BUSY, TIMEOUT, VENDOR, or what a lifecycle hook returned). */
 
 #include "st67w611.h"
 
