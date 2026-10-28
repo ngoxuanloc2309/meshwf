@@ -1,4 +1,5 @@
 #include "splc_port.h"
+#include "splc_wifi_port.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -58,6 +59,7 @@ static void splc_task(void *arg)
     (void)arg;
 
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
+    splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
 
     for (;;) {
         plc_engine_poll();
@@ -72,10 +74,10 @@ static void splc_task(void *arg)
 #if SPLC_HOST_WIFI_TASK
 static void st67_event_cb(st67w611_event_t event, void *event_data, void *user_context)
 {
-    (void)event_data;
     (void)user_context;
-    /* Runs in the vendor callback context: no blocking, no logging of long text. */
-    (void)event;
+    /* Runs in the vendor callback context: no blocking, no logging of long text.
+     * The Wi-Fi glue only copies a few values and wakes this task. */
+    splc_wifi_port_on_event(event, event_data);
 }
 
 static void wifi_task(void *arg)
@@ -104,22 +106,28 @@ static void wifi_task(void *arg)
         log_error(TAG, "ST67 bring-up failed: %s", st67w611_status_string(st));
     } else {
         log_info(TAG, "ST67 READY");
+        splc_wifi_port_set_ready(true);   /* from now on connect / scan are accepted */
     }
 
-    /* Wi-Fi ops of SimplePLC (connect/disconnect/status/scan/load/save) are
-     * the next step; until then the task only keeps the module alive and
-     * (bring-up aid) reports heap and stack headroom, because CubeMX gives the
-     * FreeRTOS heap only configTOTAL_HEAP_SIZE bytes for every task + vendor
-     * buffers. */
-    for (;;) {
+    /* This task is also the worker of the SimplePLC Wi-Fi block: connect, scan and
+     * IP polling run in splc_wifi_port_service() (no extra task: the FreeRTOS heap
+     * is only configTOTAL_HEAP_SIZE). Bring-up aid: report heap and stack headroom. */
 #if SPLC_HOST_HEAP_LOG_MS
-        log_info(TAG, "heap free=%u min_ever=%u, ST67 stack min free=%u words",
-                 (unsigned)xPortGetFreeHeapSize(),
-                 (unsigned)xPortGetMinimumEverFreeHeapSize(),
-                 (unsigned)uxTaskGetStackHighWaterMark(NULL));
-        vTaskDelay(pdMS_TO_TICKS(SPLC_HOST_HEAP_LOG_MS));
-#else
-        vTaskDelay(pdMS_TO_TICKS(1000U));
+    TickType_t next_log = xTaskGetTickCount();
+#endif
+    for (;;) {
+        splc_wifi_port_service(250U);
+#if !SPLC_WIFI_ENABLE
+        vTaskDelay(pdMS_TO_TICKS(250U));   /* the service call is a no-op without the Wi-Fi block */
+#endif
+#if SPLC_HOST_HEAP_LOG_MS
+        if ((int32_t)(xTaskGetTickCount() - next_log) >= 0) {
+            log_info(TAG, "heap free=%u min_ever=%u, ST67 stack min free=%u words",
+                     (unsigned)xPortGetFreeHeapSize(),
+                     (unsigned)xPortGetMinimumEverFreeHeapSize(),
+                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
+            next_log = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_HEAP_LOG_MS);
+        }
 #endif
     }
 }

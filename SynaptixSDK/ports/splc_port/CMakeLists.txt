@@ -11,6 +11,7 @@
 # This directory also holds splcopts.h (libs/CMakeLists.txt sets SPLC_OPTS_DIR here).
 add_library(meshwf_splc_port OBJECT
     splc_port.c
+    splc_wifi_port.c
 )
 
 target_include_directories(meshwf_splc_port PUBLIC

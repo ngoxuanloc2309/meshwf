@@ -14,7 +14,8 @@
  * Tasks (SimplePLC is single-threaded by design: only the SPLC task may touch
  * tags, rules and the Modbus draft):
  *   SPLC   plc_engine_init() then plc_engine_poll() + 1 ms delay.
- *   ST67   st67w611_init()/start() bring-up (SPLC_HOST_WIFI_TASK = 1).
+ *   ST67   st67w611_init()/start() bring-up, then the splc_wifi_port_service() loop
+ *          (SPLC_HOST_WIFI_TASK = 1; the Wi-Fi block of SimplePLC needs it).
  */
 
 #include <stdbool.h>
@@ -30,7 +31,8 @@ extern "C" {
 #define SPLC_HOST_TASK_PRIO          6U
 #endif
 
-/* Wi-Fi task: ST67 bring-up (init + start). Glue of splc_wifi_ops_t comes later. */
+/* Wi-Fi task: ST67 bring-up (init + start), then the worker of splc_wifi_port.c
+ * (connect / scan / IP polling of the SimplePLC Wi-Fi block). */
 #ifndef SPLC_HOST_WIFI_TASK
 #define SPLC_HOST_WIFI_TASK          1
 #endif
