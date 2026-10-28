@@ -21,8 +21,10 @@
 /* FreeRTOS: SynaptixSDK/ports/splc_port creates the one engine task. */
 #define SX_OS_USE_FREERTOS            1
 
-/* App link: RS485 Modbus RTU slave on USART1 (DE = PA15), in board_wifi_io.c. */
-#define SPLC_PORT_USB_CDC             0
+/* App link (rules, tags, config): 1 = USB-CDC through SimplePLC's own TinyUSB
+ * (port/usb, CubeMX USB_DRD_FS), 0 = RS485 Modbus RTU slave on USART1 (DE = PA15).
+ * Both are implemented in board_wifi_io.c; this is the only switch. */
+#define SPLC_PORT_USB_CDC             1
 
 /* Engine */
 #define PLC_SCAN_INTERVAL_MS          10U
