@@ -13,6 +13,8 @@ static st67w611_config_t config;
 static st67w611_state_t state = ST67W611_STATE_OFF;
 static st67w611_diagnostics_t diagnostics;
 static W6X_App_Cb_t vendor_callbacks;
+static volatile st67w611_mqtt_event_cb_t mqtt_event_cb;
+static void * volatile mqtt_event_context;
 static uint8_t started;
 static st67w611_scan_callback_t scan_callback;
 static void *scan_user_context;
@@ -90,6 +92,20 @@ static void publish(st67w611_event_t event, void *data)
     if (config.event_cb != NULL) {
         config.event_cb(event, data, config.user_context);
     }
+}
+
+static void vendor_mqtt_callback(W6X_event_id_t event_id, void *event_args)
+{
+    st67w611_mqtt_event_cb_t cb = mqtt_event_cb;
+    if (cb != NULL) {
+        cb((uint32_t)event_id, event_args, mqtt_event_context);
+    }
+}
+
+void st67w611_set_mqtt_event_cb(st67w611_mqtt_event_cb_t cb, void *context)
+{
+    mqtt_event_context = context;
+    mqtt_event_cb = cb;
 }
 
 static void vendor_wifi_callback(W6X_event_id_t event_id, void *event_args)
@@ -183,6 +199,7 @@ st67w611_status_t st67w611_init(const st67w611_config_t *new_config)
     memset(&vendor_callbacks, 0, sizeof(vendor_callbacks));
     vendor_callbacks.APP_wifi_cb = vendor_wifi_callback;
     vendor_callbacks.APP_error_cb = vendor_error_callback;
+    vendor_callbacks.APP_mqtt_cb = vendor_mqtt_callback;
     if (W6X_RegisterAppCb(&vendor_callbacks) != W6X_STATUS_OK) {
         set_state(ST67W611_STATE_ERROR, ST67W611_ERR_VENDOR);
         unlock_operation();
@@ -285,6 +302,7 @@ st67w611_status_t st67w611_reset(void)
     memset(&vendor_callbacks, 0, sizeof(vendor_callbacks));
     vendor_callbacks.APP_wifi_cb = vendor_wifi_callback;
     vendor_callbacks.APP_error_cb = vendor_error_callback;
+    vendor_callbacks.APP_mqtt_cb = vendor_mqtt_callback;
     if (W6X_RegisterAppCb(&vendor_callbacks) != W6X_STATUS_OK) {
         set_state(ST67W611_STATE_ERROR, ST67W611_ERR_VENDOR);
         unlock_operation(); return ST67W611_ERR_VENDOR;

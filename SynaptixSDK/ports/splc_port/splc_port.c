@@ -1,5 +1,6 @@
 #include "splc_port.h"
 #include "splc_wifi_port.h"
+#include "sx_mqtt.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -19,6 +20,16 @@
 #endif
 
 static const char *TAG = "SPLC_PORT";
+
+/* Wait of the ST67 task loop. With MQTT on, the same loop sends the queued publishes (one per
+ * pass), so it runs faster; the Wi-Fi worker works off timestamps, not pass counts. */
+#ifndef SPLC_HOST_ST67_LOOP_MS
+#if SPLC_MQTT_ENABLE
+#define SPLC_HOST_ST67_LOOP_MS   50U
+#else
+#define SPLC_HOST_ST67_LOOP_MS   250U
+#endif
+#endif
 
 /* ------------------------------------------------------------------------ */
 /* Start hook (see splc_port.h)                                              */
@@ -58,11 +69,13 @@ static void splc_task(void *arg)
 {
     (void)arg;
 
+    sx_mqtt_init();      /* register the publish callback BEFORE the engine starts (plc_mqtt.h) */
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
 
     for (;;) {
         plc_engine_poll();
+        sx_mqtt_pump((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
@@ -80,9 +93,24 @@ static void st67_event_cb(st67w611_event_t event, void *event_data, void *user_c
     splc_wifi_port_on_event(event, event_data);
 }
 
+/* The module restarted (soft reset / reset): its MQTT session is gone. The hook runs under the
+ * facade's lock, so it only sets a flag. */
+static st67w611_status_t st67_after_restart(void *context)
+{
+    (void)context;
+    sx_mqtt_notify_module_reset();
+    return ST67W611_OK;
+}
+
 static void wifi_task(void *arg)
 {
     (void)arg;
+
+    static const st67w611_lifecycle_hooks_t hooks = {
+        .before_transport_restart = NULL,
+        .after_transport_restart  = st67_after_restart,
+        .context                  = NULL,
+    };
 
     static const st67w611_config_t cfg = {
         .port_ops     = &meshwf_st67_port_ops,
@@ -90,7 +118,7 @@ static void wifi_task(void *arg)
         .event_cb     = st67_event_cb,
         .user_context = NULL,
         .capabilities = NULL,
-        .lifecycle    = NULL,
+        .lifecycle    = &hooks,
         .recovery     = {
             .max_transport_retries = 2U,
             .retry_delay_ms        = 100U,
@@ -116,7 +144,11 @@ static void wifi_task(void *arg)
     TickType_t next_log = xTaskGetTickCount();
 #endif
     for (;;) {
-        splc_wifi_port_service(250U);
+        splc_wifi_port_service(SPLC_HOST_ST67_LOOP_MS);
+        if (st == ST67W611_OK) {   /* MQTT client of the module: only after the bring-up */
+            sx_mqtt_service((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+                            splc_wifi_port_has_ip());
+        }
 #if !SPLC_WIFI_ENABLE
         vTaskDelay(pdMS_TO_TICKS(250U));   /* the service call is a no-op without the Wi-Fi block */
 #endif

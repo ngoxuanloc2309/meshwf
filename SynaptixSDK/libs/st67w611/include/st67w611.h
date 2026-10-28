@@ -155,6 +155,16 @@ st67w611_status_t st67w611_reset(void);
  * Allowed in READY/CONNECTING/CONNECTED/ERROR while started. Calls the
  * lifecycle hooks like st67w611_reset(). Blocking (seconds), task context only. */
 st67w611_status_t st67w611_soft_reset(void);
+
+/* MQTT event hook for an application component (components/st67). The vendor accepts ONE
+ * callback table and copies it (W6X_RegisterAppCb), so the facade, which owns the table,
+ * registers a forwarder for APP_mqtt_cb at every registration (init and the reset path).
+ * event_id is the vendor W6X_MQTT_EVT_*_ID; event_args is vendor-specific (for
+ * SUBSCRIPTION_RECEIVED a W6X_MQTT_Data_t pointer). Runs in the vendor callback context:
+ * do not block. NULL removes the hook. Safe to call before st67w611_init(). */
+typedef void (*st67w611_mqtt_event_cb_t)(uint32_t event_id, void *event_args, void *context);
+void st67w611_set_mqtt_event_cb(st67w611_mqtt_event_cb_t cb, void *context);
+
 st67w611_status_t st67w611_connect(const char *ssid, const char *password);
 st67w611_status_t st67w611_disconnect(void);
 st67w611_status_t st67w611_get_state(st67w611_state_t *state);

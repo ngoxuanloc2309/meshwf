@@ -97,6 +97,14 @@ static void live_set(uint16_t conn, uint16_t err, uint32_t ip)
     taskEXIT_CRITICAL();
 }
 
+bool splc_wifi_port_has_ip(void)
+{
+    taskENTER_CRITICAL();
+    const bool up = (s_live.conn == PLC_WIFI_CONN_GOT_IP);
+    taskEXIT_CRITICAL();
+    return up;
+}
+
 /* ---- facade events (vendor callback context) ---------------------------------------- */
 
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)

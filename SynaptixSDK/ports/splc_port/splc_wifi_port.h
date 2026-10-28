@@ -76,6 +76,10 @@ void splc_wifi_port_set_ready(bool ready);
  * disconnect, scan, IP polling). Never returns an error; failures end up in status(). */
 void splc_wifi_port_service(uint32_t wait_ms);
 
+/* Any task: true while the link has an IP address (conn_status GOT_IP). Reads the cache the
+ * events and the ST67 task keep, never calls the facade. */
+bool splc_wifi_port_has_ip(void);
+
 /* Facade event hook (st67w611_config_t.event_cb). Vendor callback context: it only copies
  * a few values and wakes the ST67 task. Safe to call before splc_wifi_port_init(). */
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data);
@@ -96,6 +100,7 @@ void meshwf_wifi_store_erase(void);
 static inline void splc_wifi_port_init(void) {}
 static inline void splc_wifi_port_set_ready(bool ready) { (void)ready; }
 static inline void splc_wifi_port_service(uint32_t wait_ms) { (void)wait_ms; }
+static inline bool splc_wifi_port_has_ip(void) { return false; }
 static inline void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
 { (void)event; (void)event_data; }
 

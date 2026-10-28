@@ -21,5 +21,6 @@ target_include_directories(meshwf_splc_port PUBLIC
 target_link_libraries(meshwf_splc_port PRIVATE
     splc
     st67w611_port
+    sx_mqtt
     stm32cubemx
 )
