@@ -19,6 +19,7 @@
 
 #include "main.h"      /* ST67CS_*, ST67W_RDY_*, ST67W_Wakeup_* (CubeMX labels) */
 #include "spi.h"       /* extern SPI_HandleTypeDef hspi1 */
+#include "sx_spi.h"    /* simple_plc Layer 1 SPI contract (sx_spi_*), sx_spi_mode_t */
 
 #ifdef ST67_PORT_USER_CONF
 #include ST67_PORT_USER_CONF
@@ -46,16 +47,24 @@
 #define ST67_SPI_USE_DMA           0
 #endif
 
-/* CubeMX leaves SPI1 "master keep IO state" OFF: SCK/MOSI then float between
- * transfers while CS is active. 1 = the port sets SPI_CFG2.AFCNTR (while the
- * SPI is disabled) so the peripheral keeps driving them. */
-#ifndef ST67_KEEP_SPI_IO_STATE
-#define ST67_KEEP_SPI_IO_STATE     1
+/* SCK frequency requested from sx_spi_init(). 0 (default) = keep the CubeMX
+ * SPI1 setup (prescaler 4 = 16 MHz, mode 0, MSB first). Otherwise sx_spi picks
+ * the fastest divider NOT above this value (wg_ue runs ~1 MHz on the H563; if
+ * 16 MHz is not stable on this PCB try 1000000U or 4000000U). */
+#ifndef ST67_SPI_CLOCK_HZ
+#define ST67_SPI_CLOCK_HZ          0U
 #endif
+/* Only used when ST67_SPI_CLOCK_HZ != 0 (otherwise the CubeMX mode stays). */
+#ifndef ST67_SPI_MODE
+#define ST67_SPI_MODE              SX_SPI_MODE_0
+#endif
+/* "Master keep IO state" (SCK/MOSI stay driven between transfers while CS is
+ * active) is always switched on by sx_spi_init(); CubeMX leaves it off. */
 
 /* --- CS ------------------------------------------------------------------ */
 /* ST's reference port (and the running wg_ue gateway) drive the CS GPIO HIGH
- * to select the module. Set 0 only if your PCB inverts it. */
+ * to select the module. Set 0 only if your PCB inverts it. CS, its setup time
+ * and its minimum idle gap are handled by sx_spi_select()/sx_spi_deselect(). */
 #ifndef ST67_CS_ACTIVE_HIGH
 #define ST67_CS_ACTIVE_HIGH        1
 #endif

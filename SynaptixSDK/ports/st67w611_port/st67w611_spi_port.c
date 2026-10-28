@@ -2,12 +2,16 @@
  * st67w611_spi_port.c - ST67W611 SPI / pin port for the meshwf board.
  *
  * Hardware: STM32H523, SPI1 master (software CS), RDY on EXTI, WAKEUP GPIO,
- * optional EN / BOOT GPIOs. See st67w611_spi_port_conf.h for the wiring and the
+ * optional EN / BOOT GPIOs. SPI transfers and CS go through simple_plc's
+ * sx_spi (Layer 1); RDY EXTI, WAKEUP, EN, BOOT and the optional GPDMA path stay
+ * on the HAL because sx_spi/sx_gpio have no interrupt or DMA support. See st67w611_spi_port_conf.h for the wiring and the
  * reasons behind every default. No CubeMX-generated file is modified.
  */
 #include "st67w611_spi_port.h"
 #include "st67w611_spi_port_conf.h"
 #include "st67w611_port_events.h"
+#include "sx_gpio.h"
+#include "sx_spi.h"
 
 #include <string.h>
 #include "FreeRTOS.h"
@@ -18,9 +22,6 @@ _Static_assert(ST67_RDY_IRQ_PRIORITY >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIO
                "the vendor ISR path calls FreeRTOS FromISR functions");
 _Static_assert(ST67_SPI_MAX_XFER >= 1536U && ST67_SPI_MAX_XFER <= 65535U,
                "ST67_SPI_MAX_XFER must cover a Wi-Fi frame and fit uint16_t");
-
-#define CS_ACTIVE_LEVEL    (ST67_CS_ACTIVE_HIGH ? GPIO_PIN_SET   : GPIO_PIN_RESET)
-#define CS_INACTIVE_LEVEL  (ST67_CS_ACTIVE_HIGH ? GPIO_PIN_RESET : GPIO_PIN_SET)
 
 /* ------------------------------------------------------------------ state */
 
@@ -46,46 +47,12 @@ static struct {
 static uint8_t s_zeros[ST67_SPI_MAX_XFER];
 static uint8_t s_sink[ST67_SPI_MAX_XFER];
 
-static bool     s_dwt_ok;
-static bool     s_cs_released;           /* s_cs_release_cyc is valid */
-static uint32_t s_cs_release_cyc;
+/* sx_spi: SPI1 transfers + software CS (polarity, setup time, minimum idle gap). */
+static sx_spi_t        s_spi;
+static sx_spi_config_t s_spi_cfg;
+static sx_gpio_pin_t   s_cs_pin = { ST67SPI_CS_PORT, ST67SPI_CS_PIN, SX_GPIO_MODE_OUTPUT_PP };
 
 /* ----------------------------------------------------------------- timing */
-
-static void timing_init(void)
-{
-#if defined(CoreDebug)
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-#else
-    DCB->DEMCR |= DCB_DEMCR_TRCENA_Msk;
-#endif
-    DWT->CYCCNT = 0U;
-    DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
-    /* Prove the counter runs; otherwise delay_us() falls back to a NOP loop. */
-    uint32_t a = DWT->CYCCNT;
-    for (volatile uint32_t i = 0U; i < 16U; ++i) { __NOP(); }
-    s_dwt_ok = (DWT->CYCCNT != a);
-}
-
-static void delay_us(uint32_t us)
-{
-    if (us == 0U) {
-        return;
-    }
-    uint32_t per_us = SystemCoreClock / 1000000U;
-    if (per_us == 0U) {
-        per_us = 1U;
-    }
-    if (s_dwt_ok) {
-        uint32_t cycles = us * per_us;
-        uint32_t t0 = DWT->CYCCNT;
-        while ((uint32_t)(DWT->CYCCNT - t0) < cycles) { }
-    } else {
-        /* ~4 cycles per iteration; errs on the long side, never short. */
-        volatile uint32_t n = (us * per_us) / 4U + 1U;
-        while (n-- != 0U) { __NOP(); }
-    }
-}
 
 static void delay_ms_os(uint32_t ms)
 {
@@ -98,15 +65,9 @@ static void delay_ms_os(uint32_t ms)
 
 /* ------------------------------------------------------------------- pins */
 
-static void cs_write(bool asserted)
-{
-    HAL_GPIO_WritePin(ST67SPI_CS_PORT, ST67SPI_CS_PIN,
-                      asserted ? CS_ACTIVE_LEVEL : CS_INACTIVE_LEVEL);
-}
-
 static void hw_pins_safe_state(void)
 {
-    cs_write(false);
+    sx_spi_deselect(&s_spi);
 #if ST67_HAS_BOOT
     HAL_GPIO_WritePin(ST67SPI_BOOT_PORT, ST67SPI_BOOT_PIN, GPIO_PIN_RESET);   /* boot from flash */
 #endif
@@ -184,31 +145,19 @@ static void rdy_irq_disarm(void)
 
 /* --------------------------------------------------------------- transfers */
 
-static void keep_io_state(void)
-{
-#if ST67_KEEP_SPI_IO_STATE
-    SPI_HandleTypeDef *h = ST67_SPI_HANDLE;
-    h->Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
-    if ((h->Instance->CR1 & SPI_CR1_SPE) == 0U) {      /* AFCNTR is writable only with SPE = 0 */
-        SET_BIT(h->Instance->CFG2, SPI_CFG2_AFCNTR);
-    }
-#endif
-}
-
 /* Polled full-duplex transfer; a missing side uses the zero source / the sink. */
 static int transfer_polled(const void *tx, void *rx, uint16_t len, uint32_t timeout_ms)
 {
     const uint8_t *txb = (tx != NULL) ? (const uint8_t *)tx : s_zeros;
     uint8_t       *rxb = (rx != NULL) ? (uint8_t *)rx       : s_sink;
-    HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(ST67_SPI_HANDLE, (uint8_t *)txb, rxb,
-                                                   len, timeout_ms);
+    int rc = sx_spi_transfer(&s_spi, txb, rxb, len, timeout_ms);
     s_diag.transfer_count++;
-    if (st == HAL_TIMEOUT) {
+    if (rc == SX_SPI_ERR_TIMEOUT) {
         s_diag.timeout_count++;
     }
-    if (st != HAL_OK) {
+    if (rc != SX_SPI_OK) {
         s_diag.error_count++;
-        ST67_LOG("st67 spi polled xfer failed (%d) len=%u", (int)st, (unsigned)len);
+        ST67_LOG("st67 spi polled xfer failed (%d) len=%u", rc, (unsigned)len);
         return -1;
     }
     return 0;
@@ -236,8 +185,18 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
     }
 #endif
 
-    timing_init();
-    keep_io_state();
+    memset(&s_spi_cfg, 0, sizeof(s_spi_cfg));
+    s_spi_cfg.pDriver        = h;
+    s_spi_cfg.clock_hz       = ST67_SPI_CLOCK_HZ;
+    s_spi_cfg.mode           = ST67_SPI_MODE;
+    s_spi_cfg.cs             = &s_cs_pin;
+    s_spi_cfg.cs_active_high = (ST67_CS_ACTIVE_HIGH != 0);
+    s_spi_cfg.cs_setup_us    = (uint16_t)ST67_CS_SETUP_US;
+    s_spi_cfg.cs_gap_us      = (uint16_t)ST67_CS_MIN_GAP_US;
+    if (sx_spi_init(&s_spi, &s_spi_cfg) != SX_SPI_OK) {    /* also: keep-IO-state, CS idle level */
+        ST67_LOG("st67 spi: sx_spi_init failed");
+        return -1;
+    }
     rdy_irq_arm();          /* before the power sequence so no RDY edge is missed */
     memset(s_zeros, 0, sizeof(s_zeros));
 
@@ -246,7 +205,6 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
 #else
     hw_pins_safe_state();   /* no EN pin: the module was powered with the board */
 #endif
-    s_cs_released = false;
     s_inited = 1U;
     return 0;
 }
@@ -262,7 +220,7 @@ static int port_deinit(void *context)
     s_complete_cb = NULL;
     s_complete_ctx = NULL;
     rdy_irq_disarm();
-    cs_write(false);
+    sx_spi_deselect(&s_spi);
 #if ST67_HAS_EN
     HAL_GPIO_WritePin(ST67SPI_EN_PORT, ST67SPI_EN_PIN, GPIO_PIN_RESET);
 #endif
@@ -341,18 +299,9 @@ static int port_set_cs(void *context, bool asserted)
 {
     (void)context;
     if (asserted) {
-        /* Keep CS inactive for at least ST67_CS_MIN_GAP_US since the last release. */
-        if (s_cs_released && s_dwt_ok) {
-            uint32_t per_us = SystemCoreClock / 1000000U;
-            uint32_t need = ST67_CS_MIN_GAP_US * per_us;
-            while ((uint32_t)(DWT->CYCCNT - s_cs_release_cyc) < need) { }
-        }
-        cs_write(true);
-        delay_us(ST67_CS_SETUP_US);
+        sx_spi_select(&s_spi);      /* honours the minimum idle gap, then the setup time */
     } else {
-        cs_write(false);
-        s_cs_release_cyc = s_dwt_ok ? DWT->CYCCNT : 0U;
-        s_cs_released = true;
+        sx_spi_deselect(&s_spi);
     }
     return 0;
 }
