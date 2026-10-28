@@ -1,0 +1,428 @@
+/**
+  ******************************************************************************
+  * @file    util_task_perf.c
+  * @author  ST67 Application Team
+  * @brief   This file provides the implementation of Task Performance measurement
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2024 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+
+/* Includes ------------------------------------------------------------------*/
+#include <stdarg.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <string.h>
+
+#include "util_task_perf.h"
+#include "shell.h"
+#include "logging.h"
+#include "FreeRTOS.h"
+#include "task.h"
+
+/* Private defines -----------------------------------------------------------*/
+/** @addtogroup ST67W6X_Utilities_Performance_Task_Perf_Constants
+  * @{
+  */
+
+#if (TASK_PERF_ENABLE == 1)
+/*
+  TASK_PERF_ENABLE requires FreeRTOS function vTaskGetInfo
+  which is only enabled if configUSE_TRACE_FACILITY == 1.
+  Set #define configUSE_TRACE_FACILITY 1 to fix this error. (in FreeRTOSConfig.h)
+*/
+#if (configUSE_TRACE_FACILITY == 0)
+#error "Definition configUSE_TRACE_FACILITY must equal 1 to enable TASK_PERF_ENABLE."
+#endif /* configUSE_TRACE_FACILITY */
+#endif /* TASK_PERF_ENABLE */
+
+#ifndef PERF_MAXTHREAD
+/** Maximum number of thread to monitor */
+#define PERF_MAXTHREAD        8U
+#endif /* PERF_MAXTHREAD */
+
+/**
+  * @brief  64 bits number to string conversion
+  * @note   20 DIGITS for 64bits and 1 bits for '\0'
+  */
+#define STR64BIT_DIGIT        20+1
+
+/** Number of delimiter line characters to display the report */
+#define SEPARATOR_SIZE        56
+
+/** @} */
+
+/* Private typedef -----------------------------------------------------------*/
+/** @defgroup ST67W6X_Utilities_Performance_Task_Perf_Types ST67W6X Utility Performance Task Perf Types
+  * @ingroup  ST67W6X_Utilities_Performance_Task_Perf
+  * @{
+  */
+
+/**
+  * @brief  Task performance state
+  */
+typedef enum
+{
+  PERF_TASK_STATE_INIT = 0,                     /*!< Task performance not initialized */
+  PERF_TASK_STATE_STOPPED,                      /*!< Task performance stopped */
+  PERF_TASK_STATE_RUNNING,                      /*!< Task performance running */
+} task_perf_state_e;
+
+/**
+  * @brief  Task performance structure
+  */
+typedef struct
+{
+  uint32_t      state;                          /*!< Task performance state */
+  uint32_t      task_count;                     /*!< Task count */
+  uint64_t      elapsed_cycle[PERF_MAXTHREAD];  /*!< Elapsed cycle for each thread */
+  uint32_t      cycle_in[PERF_MAXTHREAD];       /*!< Cycle value when enter in the thread */
+  TaskHandle_t  handle[PERF_MAXTHREAD];         /*!< Task handle for each thread */
+  char          name[PERF_MAXTHREAD][11];       /*!< Task name for each thread */
+  uint32_t      task_current_cycle;             /*!< Current cycle value */
+} task_perf_t;
+
+/** @} */
+
+/* Private macros ------------------------------------------------------------*/
+/* Private variables ---------------------------------------------------------*/
+/** @defgroup ST67W6X_Utilities_Performance_Task_Perf_Variables ST67W6X Utility Performance Task Perf Variables
+  * @ingroup  ST67W6X_Utilities_Performance_Task_Perf
+  * @{
+  */
+
+#if (TASK_PERF_ENABLE == 1)
+/** Task performance structure */
+static task_perf_t task_perf;
+
+/** Task Performance report title */
+static const char task_perf_report_title[] = "Task Performance report";
+#endif /* TASK_PERF_ENABLE */
+
+/** @} */
+
+/* Private function prototypes -----------------------------------------------*/
+/** @defgroup ST67W6X_Utilities_Performance_Task_Perf_Functions ST67W6X Utility Performance Task Perf Functions
+  * @ingroup  ST67W6X_Utilities_Performance_Task_Perf
+  * @{
+  */
+
+/**
+  * @brief  Get the current cycle value
+  * @retval Current cycle value
+  */
+uint32_t get_cycle(void);
+
+/**
+  * @brief  Get the task name
+  * @param  xHandle: Task handle
+  * @retval Task name
+  */
+const char *task_perf_get_task_name(TaskHandle_t xHandle);
+
+/**
+  * @brief  Num64 to string converter as not available in reduced C
+  * @param  out: pointer to the output string
+  * @param  out_strlen: length of the output string
+  * @param  num: 64 bit number to convert
+  */
+void task_num2string64(char *out, int32_t out_strlen, const uint64_t num);
+
+#if (TASK_PERF_ENABLE == 1)
+/**
+  * @brief  Task Performance measurement stop or start shell function
+  * @param  argc: number of arguments
+  * @param  argv: pointer to the arguments
+  * @retval ::SHELL_STATUS_OK on success
+  */
+int32_t task_perf_shell(int32_t argc, char **argv);
+
+/**
+  * @brief  Task Performance measurement report shell function
+  * @param  argc: number of arguments
+  * @param  argv: pointer to the arguments
+  * @retval ::SHELL_STATUS_OK on success
+  */
+int32_t task_perf_shell_report(int32_t argc, char **argv);
+#endif /* TASK_PERF_ENABLE */
+
+/** @} */
+
+/* Functions Definition ------------------------------------------------------*/
+/** @addtogroup ST67W6X_Utilities_Performance_Task_Perf_Functions
+  * @{
+  */
+
+void task_perf_in_hook(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  uint32_t i;
+  static uint32_t first_time = 1U;
+  /* Get the current task handle */
+  TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+
+  /* Initialize the task_perf structure at startup */
+  if (first_time == 1U)
+  {
+    first_time = 0U;
+    (void)memset(&task_perf, 0, sizeof(task_perf));
+  }
+
+  for (i = 0; i < PERF_MAXTHREAD; i++)
+  {
+    /* Check if the thread is already in the list */
+    if (NULL == task_perf.handle[i])
+    {
+      /* New thread */
+      task_perf.task_count++;
+      task_perf.handle[i] = xHandle;
+      (void)snprintf(task_perf.name[i], 11, "%10s", task_perf_get_task_name(xHandle));
+    }
+
+    if (xHandle == task_perf.handle[i])
+    {
+      /* Save the enter cycle count */
+      task_perf.cycle_in[i] = get_cycle();
+      break;
+    }
+  }
+#endif /* TASK_PERF_ENABLE */
+}
+
+void task_perf_out_hook(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  uint32_t i;
+  /* Get the current task handle */
+  TaskHandle_t xHandle = xTaskGetCurrentTaskHandle();
+
+  for (i = 0; i < PERF_MAXTHREAD; i++)
+  {
+    /* Check if the thread is already in the list */
+    if (NULL == task_perf.handle[i])
+    {
+      /* New thread */
+      task_perf.handle[i] = xHandle;
+      (void)snprintf(task_perf.name[i], 11, "%10s", task_perf_get_task_name(xHandle));
+    }
+
+    if (xHandle == task_perf.handle[i])
+    {
+      /* Save the exit cycle count */
+      task_perf.elapsed_cycle[i] += (get_cycle() - task_perf.cycle_in[i]);
+      break;
+    }
+  }
+#endif /* TASK_PERF_ENABLE */
+}
+
+void task_perf_start(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  util_task_port_reset();
+
+  /* Initialize the task_perf structure */
+  (void)memset(&task_perf, 0, sizeof(task_perf));
+  task_perf_in_hook();
+  task_perf.state = PERF_TASK_STATE_RUNNING;
+
+#endif /* TASK_PERF_ENABLE */
+}
+
+void task_perf_resume(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  util_task_port_resume();
+  task_perf.state = PERF_TASK_STATE_RUNNING;
+#endif /* TASK_PERF_ENABLE */
+}
+
+void task_perf_stop(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  util_task_port_stop();
+  task_perf.task_current_cycle = get_cycle();
+  task_perf.state = PERF_TASK_STATE_STOPPED;
+#endif /* TASK_PERF_ENABLE */
+}
+
+void task_perf_report(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  uint64_t total_cycle = 0;
+  char cycle_string64[STR64BIT_DIGIT];
+  char separator[SEPARATOR_SIZE] = {0};
+  (void)memset(separator, (int32_t)'-', sizeof(separator) - 1U);
+
+  task_perf_out_hook();
+
+  if (task_perf.state == PERF_TASK_STATE_INIT)
+  {
+    LogInfo("### %s: not started\n", task_perf_report_title);
+  }
+  else if (task_perf.task_count == 1U)
+  {
+    LogInfo("### %s: only one thread detected. verify if the hooks are called by the RTOS\n", task_perf_report_title);
+  }
+  else
+  {
+    /* Display the CPU frequency */
+    LogInfo("### %s CPU Freq %3" PRIu32 " Mhz\n", task_perf_report_title, SystemCoreClock / 1000000U);
+
+    /* Display the header */
+    LogInfo("%-17s%-16s%-14stime (ms)\n", "thread id", "name", "cycles");
+    LogInfo("%s\n", separator);
+
+    {
+      uint32_t count = 0;
+      /* Display the thread performance */
+      while ((count < PERF_MAXTHREAD) && (task_perf.handle[count] != NULL))
+      {
+        task_num2string64(cycle_string64, STR64BIT_DIGIT, task_perf.elapsed_cycle[count]);
+        LogInfo("thread #%" PRIu32 "  %10s   %15s  %10" PRIu32 "\n", count, task_perf.name[count],
+                cycle_string64, (uint32_t)(task_perf.elapsed_cycle[count] / (SystemCoreClock / 1000U)));
+        total_cycle += task_perf.elapsed_cycle[count];
+        count++;
+      }
+      LogInfo("%s\n", separator);
+    }
+    /* Display the total performance */
+    task_num2string64(cycle_string64, STR64BIT_DIGIT, total_cycle);
+    LogInfo("%-24s%15s  %10" PRIu32 "\n", "Total", cycle_string64,
+            (uint32_t)(total_cycle / (SystemCoreClock / 1000U)));
+
+    LogInfo("### %s end\n", task_perf_report_title);
+  }
+
+  task_perf_in_hook();
+
+#endif /* TASK_PERF_ENABLE */
+
+  task_alloc_report();
+}
+
+void task_alloc_report(void)
+{
+#if ( ( configUSE_TRACE_FACILITY == 1 ) && ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 ) )
+  char *p_write_buffer;
+  char *p_info;
+
+  p_info = pvPortMalloc(512);
+  if (NULL == p_info)
+  {
+    return;
+  }
+
+  /* Fill the buffer with the header description */
+  (void)snprintf(p_info, 512, "%-*s%s    %s   %s %s\n********************************************\n",
+                 (configMAX_TASK_NAME_LEN - 3), "Task", "State", "Prio", "Free(u32)", "Index");
+  /* Get the address of the buffer after the header description */
+  p_write_buffer = p_info + strlen(p_info);
+  /* Fill the last character of the buffer with the null character */
+  p_write_buffer[0] = '\0';
+  vTaskList(p_write_buffer);
+  LogInfo("%s", p_info);
+
+  vPortFree(p_info);
+#endif /* ( configUSE_TRACE_FACILITY == 1 ) && ( configUSE_STATS_FORMATTING_FUNCTIONS > 0 ) */
+  return;
+}
+
+/* Private Functions Definition ----------------------------------------------*/
+uint32_t get_cycle(void)
+{
+#if (TASK_PERF_ENABLE == 1)
+  if (task_perf.state == PERF_TASK_STATE_RUNNING)
+  {
+    return util_task_port_get_cycle();
+  }
+  else
+  {
+    /* Return the last cycle value */
+    return task_perf.task_current_cycle;
+  }
+#else
+  return 0;
+#endif /* TASK_PERF_ENABLE */
+}
+
+const char *task_perf_get_task_name(TaskHandle_t xHandle)
+{
+  TaskStatus_t xTaskDetails = {0};
+  vTaskGetInfo(
+    /* The handle of the task being queried. */
+    xHandle,
+    /* The TaskStatus_t structure to complete with information on xTask. */
+    &xTaskDetails,
+    /* Include the stack high water mark value in the TaskStatus_t structure. */
+    pdTRUE,
+    /* Include the task state in the TaskStatus_t structure. */
+    eInvalid);
+  return (const char *)xTaskDetails.pcTaskName;
+}
+
+void task_num2string64(char *out, int32_t out_strlen, const uint64_t num)
+{
+  uint64_t temp = num;
+  uint32_t count = 0;
+
+  /* Count number of digit */
+  while ((temp != 0U) && (count < out_strlen))
+  {
+    temp = temp / 10U;
+    count++;
+  }
+
+  /* Go to end of string */
+  out += count;
+
+  /* Write end of string char */
+  *out-- = '\0';
+
+  temp = num;
+  while (temp != 0U)
+  {
+    *out-- = (char)((temp % 10) + '0');
+    temp = temp / 10U;
+  }
+}
+
+#if (TASK_PERF_ENABLE == 1)
+int32_t task_perf_shell(int32_t argc, char **argv)
+{
+  if ((argc == 2) && (strncmp(argv[1], "-s", 2) == 0))
+  {
+    task_perf_stop();
+  }
+  else
+  {
+    task_perf_start();
+  }
+  return SHELL_STATUS_OK;
+}
+
+SHELL_CMD_EXPORT_ALIAS(task_perf_shell, task_perf, task_perf [ -s ]. Start or stop [ -s ] task performance measurement);
+
+int32_t task_perf_shell_report(int32_t argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+
+  task_perf_report();
+
+  return SHELL_STATUS_OK;
+}
+
+SHELL_CMD_EXPORT_ALIAS(task_perf_shell_report, task_report, task_report. Display task performance report);
+
+#endif /* TASK_PERF_ENABLE */
+
+/** @} */

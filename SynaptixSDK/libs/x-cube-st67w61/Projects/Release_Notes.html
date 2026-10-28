@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Release Notes for Projects of X-CUBE-ST67W61 Expansion Software Package</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../_htmresc/mini-st_2020.css" />
+  <link rel="icon" type="image/x-icon" href="../_htmresc/favicon.png" />
+</head>
+<body>
+<div class="row">
+<div class="col-sm-12 col-lg-4">
+<center>
+<h1 id="release-notes-for">Release Notes for</h1>
+<h1 id="projects-of-x-cube-st67w61-expansion-software-package"><mark>Projects of X-CUBE-ST67W61 Expansion Software Package</mark></h1>
+<p>Copyright © 2025-2026 STMicroelectronics<br />
+</p>
+<a href="https://www.st.com" class="logo"><img src="../_htmresc/st_logo_2020.png" alt="ST logo" /></a>
+</center>
+<h1 id="purpose">Purpose</h1>
+<p>The projects are a set of applicative tasks that aim to explain and provide use cases of the different products features based on the products hardware (Boards, STM32 Core(s) features, interconnections and peripherals) and built around the different firmware components. They can be directly used or adapted by the X-CUBE-ST67W61 Expansion Software Package. They provide basic functionalities, show main features or demonstrate performance. They are provided with preconfigured projects for the main supported toolchains.</p>
+<p>In the X-CUBE-ST67W61 Expansion Software Package, the projects are organized in a sequential scheme based on the following levels:</p>
+<ul>
+<li>Boards: Hardware platform (evaluation, discovery, nucleo boards)</li>
+<li>Project Category:
+<ul>
+<li>Applications</li>
+<li>Demonstrations</li>
+<li>Utilities</li>
+</ul></li>
+</ul>
+<p>The exhaustive list of projects is provided in this table: <a href="X-CUBE-ST67W61_ProjectsList.html">X-CUBE-ST67W61_ProjectsList</a>.</p>
+</div>
+<section id="update-history" class="col-sm-12 col-lg-8">
+<h1>Update history</h1>
+<div class="collapse">
+<input type="checkbox" id="collapse-section04" checked aria-hidden="true"> <label for="collapse-section04" aria-hidden="true"><strong>V1.3.0 / 10-April-2026</strong></label>
+<div>
+<h2 id="main-changes">Main changes</h2>
+<ul>
+<li><strong>Applications</strong>
+<ul>
+<li>ST67W6X_WiFi_Commissioning and ST67W6X_HTTP_Server
+<ul>
+<li>ID P67W61-716: Fix http server partially received frame</li>
+<li>ID P67W61-745: Fix multiple display of station’s IP connected to soft-AP</li>
+</ul></li>
+<li>ST67W6X_FOTA:
+<ul>
+<li>ID P67W61-667: Remove FreeRTOS notify by index usage in fota application to stay compliant with old Kernel versions</li>
+<li>ID P67W61-754: Add FOTA application over HTTPS LWIP and MbedTLS</li>
+</ul></li>
+<li>ST67W6X_CLI_LWIP:
+<ul>
+<li>ID P67W61-695: Add LwIP statistics debug with shell command</li>
+<li>ID P67W61-704: Update lwipopts.h with reviewed parameters and remove redundant parameters</li>
+</ul></li>
+<li>ST67W6X_MQTT:
+<ul>
+<li>ID P67W61-746: Update MQTT certificate and sni configuration on server with the mbedTLS3.6 component upgrade</li>
+</ul></li>
+<li>ST67W6X_BLE_Commissioning:
+<ul>
+<li>ID P67W61-755: Increase FUOTA and SPI buffer size to avoid packet loss issue with high BLE transfer rate</li>
+</ul></li>
+<li>All LwIP + mbedTLS applications:
+<ul>
+<li>ID P67W61-730: Rework mbedTLS applicative files to make them generic and commonisable</li>
+<li>ID P67W61-756: Optimize MbedTLS configuration to reduce its size</li>
+</ul></li>
+<li>All applications
+<ul>
+<li>ID P67W61-676: Fix MISRA C:2012 warnings on X-CUBE-ST67W61 package content</li>
+<li>ID P67W61-758: Fix missing W6X defines in w6x_config.h</li>
+</ul></li>
+</ul></li>
+<li><strong>Host boards</strong>
+<ul>
+<li>NUCLEO-N657X0-Q
+<ul>
+<li>ID P67W61-717: Update to the size and location of ROM and RAM regions in N6 projects</li>
+<li>ID P67W61-762: Add ST67W6X_CLI_LWIP project</li>
+</ul></li>
+<li>NUCLEO-H7S3L8
+<ul>
+<li>ID P67W61-720: Update the SPI Baudrate from 50 to 40MBits/s of NUCLEO-H7S3L8 projects to comply with ST67W611M specification</li>
+</ul></li>
+</ul></li>
+</ul>
+<h2 id="contents">Contents</h2>
+<p>Eleven applications and two demonstrations exercising the ST67W6X_Network_Driver capabilities, and one utility.</p>
+<p>These projects are developed using the following STM32Cube and X-CUBE packages:</p>
+<ul>
+<li><p>STM32CubeH5 V1.5.0</p></li>
+<li><p>STM32CubeH7RS V1.3.0</p></li>
+<li><p>STM32CubeN6 V1.3.0</p></li>
+<li><p>STM32CubeU5 V1.8.0</p></li>
+<li><p>X-CUBE-FREERTOS V1.4.0</p></li>
+<li><p>X-CUBE-MEMS1 V12.0.0</p></li>
+<li><p><strong>Applications</strong></p>
+<ul>
+<li>ST67W6X_BLE_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Bluetooth Low Energy.</li>
+<li>ST67W6X_BLE_p2pClient : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT Client).</li>
+<li>ST67W6X_BLE_p2pServer : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT server).</li>
+<li>ST67W6X_CLI : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi and Bluetooth LE solution via command line interface (CLI).</li>
+<li>ST67W6X_CLI_LWIP : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi, Bluetooth LE and Network interface with LwIP solutions via command line interface (CLI).</li>
+<li>ST67W6X_Echo : This application demonstrates the TCP Echo feature over Wi-Fi.</li>
+<li>ST67W6X_FOTA : This application aims to demonstrate the FOTA (Firmware update Over-The-Air) feature over Wi-Fi.</li>
+<li>ST67W6X_FOTA_LWIP : This application demonstrates the FOTA (Firmware update Over-The-Air) feature over Wi-Fi using the STM32-hosted LwIP network stack and MbedTLS.</li>
+<li>ST67W6X_HTTP_Server : This application aims to demonstrate an HTTP server over Network API, hosted by a device configured as a soft access point (soft-AP).</li>
+<li>ST67W6X_HTTPS_Client : This application aims to demonstrate an HTTPS Client over Network API with basic GET requests to retrieve the weather from different major capitals around the world.</li>
+<li>ST67W6X_WiFi_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Wi-Fi.</li>
+</ul></li>
+<li><p><strong>Demonstrations</strong></p>
+<ul>
+<li>ST67W6X_MQTT : This demonstration aims to demonstrate an example of MQTT client over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+<li>ST67W6X_MQTT_LWIP : This application aims to demonstrate an example of MQTT client over LwIP over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+</ul></li>
+<li><p><strong>Utilities</strong></p>
+<ul>
+<li>NCP_Loader: This application aims to flash the ST67W611M binaries and to execute the Manufacturing test over STM32 UART link.</li>
+</ul></li>
+</ul>
+<p><small>The components flagged by “<span class="icon-st-update"></span>” have changed since the previous release. “<span class="icon-st-add"></span>” are new.</small></p>
+<p><strong>Projects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Board/Component</th>
+<th>Project Category</th>
+<th style="text-align: left;">Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Demonstrations<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Demonstrations<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Utilities</td>
+</tr>
+<tr>
+<td>ST67W6X_Scripts</td>
+<td>Utilities<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\ST67W6X_Scripts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="known-limitations">Known limitations</h2>
+<ul>
+<li>The Host STOP Power mode is not supported in some applications</li>
+<li>The TCP echo server (tcpbin.com) used in example has two limitations: Messages shall end by (0x0A) and not contain 0x0D)</li>
+</ul>
+<h2 id="development-toolchains-and-compilers">Development toolchains and compilers</h2>
+<ul>
+<li>IAR Embedded Workbench for Arm (EWARM) toolchain <strong>V9.30.1</strong></li>
+<li>RealView Microcontroller Development Kit (MDK-ARM) toolchain <strong>V5.39</strong></li>
+<li>STM32CubeIDE (Default GCC14 toolchain supported) <strong>V2.1.0</strong></li>
+</ul>
+<h2 id="supported-devices-and-boards">Supported devices and boards</h2>
+<ul>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h7s3l8.html">NUCLEO-H7S3L8</a> <em>(MB1737)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h563zi.html">NUCLEO-H563ZI</a> <em>(MB1404)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-n657x0-q.html">NUCLEO-N657X0-Q</a> <em>(MB1940)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html">NUCLEO-U575ZI-Q</a> <em>(MB1549)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+</ul>
+<h2 id="dependencies">Dependencies</h2>
+<p>This software release is compatible with:</p>
+<ul>
+<li>STM32CubeMX version V6.17.0</li>
+<li>STM32CubeProgrammer version V2.22.0</li>
+</ul>
+</div>
+</div>
+<div class="collapse">
+<input type="checkbox" id="collapse-section03" aria-hidden="true"> <label for="collapse-section03" aria-hidden="true"><strong>V1.2.0 / 19-December-2025</strong></label>
+<div>
+<h2 id="main-changes-1">Main changes</h2>
+<ul>
+<li><p>SLA0044 Legal terms updated to latest revision (Rev 6 / October 2025)</p></li>
+<li><p>All FreeRTOS application files regenerated using STM32CubeMX V6.16.0 and FreeRTOS pack V1.4.0</p></li>
+<li><p><strong>Applications</strong></p>
+<ul>
+<li>ST67W6X_CLI_LWIP
+<ul>
+<li>ID 220325: Enable power save capability</li>
+<li>ID 220926: Add echo feature over LwIP with IPv6 connection</li>
+<li>ID 215902: Add soft-AP support over LwIP (LwIP soft-AP capability, DHCP server, Stations management)</li>
+<li>ID 222687: Add example of ping IPv6 over LwIP</li>
+</ul></li>
+<li>ST67W6X_CLI_LWIP and ST67W6X_MQTT_LWIP
+<ul>
+<li>ID 223459: Add SNTP feature over LwIP</li>
+</ul></li>
+<li>ST67W6X_FOTA
+<ul>
+<li>ID 218296: Wait ST67 ready event after FOTA update</li>
+<li>ID 221622: Fix FOTA success message not displaying and not catching the module ready event</li>
+</ul></li>
+<li>ST67W6X_HTTP_Client
+<ul>
+<li>ID 222160: Update of HTTPS Client weather certificate from R13 to R12</li>
+</ul></li>
+<li>All applications
+<ul>
+<li>ID 212841: Manage SPI only in full duplex TX/RX to prevent MOSI floating line</li>
+<li>ID 220984: Add SPI handle condition in spi_port callbacks + add error callback</li>
+</ul></li>
+</ul></li>
+<li><p><strong>Demonstrations</strong></p>
+<ul>
+<li>ST67W6X_MQTT_LWIP
+<ul>
+<li>ID 221361: Add support of MQTT TLS with mbedTLS over LwIP</li>
+</ul></li>
+</ul></li>
+<li><p><strong>Host boards</strong></p>
+<ul>
+<li>NUCLEO-N657X0-Q
+<ul>
+<li>ID 222817: Option --align needed with STM32CubeProgrammer SigningTool v2.21.0 to sign N6 binaries</li>
+</ul></li>
+</ul></li>
+</ul>
+<h2 id="contents-1">Contents</h2>
+<p>Ten applications and two demonstrations exercising the ST67W6X_Network_Driver capabilities, and one utility.</p>
+<p>These projects are developed using the following STM32Cube and X-CUBE packages:</p>
+<ul>
+<li><p>STM32CubeH5 V1.5.0</p></li>
+<li><p>STM32CubeH7RS V1.3.0<span class="icon-st-update"></span></p></li>
+<li><p>STM32CubeN6 V1.3.0<span class="icon-st-update"></span></p></li>
+<li><p>STM32CubeU5 V1.8.0<span class="icon-st-update"></span></p></li>
+<li><p>X-CUBE-FREERTOS V1.4.0<span class="icon-st-update"></span></p></li>
+<li><p>X-CUBE-MEMS1 V12.0.0<span class="icon-st-update"></span></p></li>
+<li><p><strong>Applications</strong></p>
+<ul>
+<li>ST67W6X_BLE_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Bluetooth Low Energy.</li>
+<li>ST67W6X_BLE_p2pClient : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT Client).</li>
+<li>ST67W6X_BLE_p2pServer : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT server).</li>
+<li>ST67W6X_CLI : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi and Bluetooth LE solution via command line interface (CLI).</li>
+<li>ST67W6X_CLI_LWIP : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi, Bluetooth LE and Network interface with LwIP solutions via command line interface (CLI).</li>
+<li>ST67W6X_Echo : This application demonstrates the TCP Echo feature over Wi-Fi.</li>
+<li>ST67W6X_FOTA : This application aims to demonstrate the FOTA (Firmware update Over-The-Air) feature over Wi-Fi.</li>
+<li>ST67W6X_HTTP_Server : This application aims to demonstrate an HTTP server over Network API, hosted by a device configured as a soft access point (soft-AP).</li>
+<li>ST67W6X_HTTPS_Client : This application aims to demonstrate an HTTPS Client over Network API with basic GET requests to retrieve the weather from different major capitals around the world.</li>
+<li>ST67W6X_WiFi_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Wi-Fi.</li>
+</ul></li>
+<li><p><strong>Demonstrations</strong></p>
+<ul>
+<li>ST67W6X_MQTT : This demonstration aims to demonstrate an example of MQTT client over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+<li>ST67W6X_MQTT_LWIP : This application aims to demonstrate an example of MQTT client over LwIP over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+</ul></li>
+<li><p><strong>Utilities</strong></p>
+<ul>
+<li>NCP_Loader: This application aims to flash the ST67W611M binaries and to execute the Manufacturing test over STM32 UART link.</li>
+</ul></li>
+</ul>
+<p><small>The components flagged by “<span class="icon-st-update"></span>” have changed since the previous release. “<span class="icon-st-add"></span>” are new.</small></p>
+<p><strong>Projects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Board/Component</th>
+<th>Project Category</th>
+<th style="text-align: left;">Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Demonstrations<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Demonstrations<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Utilities</td>
+</tr>
+<tr>
+<td>ST67W6X_Scripts</td>
+<td>Utilities<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\ST67W6X_Scripts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="known-limitations-1">Known limitations</h2>
+<ul>
+<li>The Host STOP Power mode is not supported in some applications</li>
+<li>The TCP echo server (tcpbin.com) used in example has two limitations: Messages shall end by (0x0A) and not contain 0x0D)</li>
+</ul>
+<h2 id="development-toolchains-and-compilers-1">Development toolchains and compilers</h2>
+<ul>
+<li>IAR Embedded Workbench for Arm (EWARM) toolchain <strong>V9.30.1</strong></li>
+<li>RealView Microcontroller Development Kit (MDK-ARM) toolchain <strong>V5.39</strong></li>
+<li>STM32CubeIDE (Default GCC13 toolchain supported) <strong>V2.0.0</strong></li>
+</ul>
+<h2 id="supported-devices-and-boards-1">Supported devices and boards</h2>
+<ul>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h7s3l8.html">NUCLEO-H7S3L8</a> <em>(MB1737)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h563zi.html">NUCLEO-H563ZI</a> <em>(MB1404)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-n657x0-q.html">NUCLEO-N657X0-Q</a> <em>(MB1940)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html">NUCLEO-U575ZI-Q</a> <em>(MB1549)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+</ul>
+<h2 id="dependencies-1">Dependencies</h2>
+<p>This software release is compatible with:</p>
+<ul>
+<li>STM32CubeMX version V6.16.0</li>
+<li>STM32CubeProgrammer version V2.21.0</li>
+</ul>
+</div>
+</div>
+<div class="collapse">
+<input type="checkbox" id="collapse-section02" aria-hidden="true"> <label for="collapse-section02" aria-hidden="true"><strong>V1.1.0 / 26-September-2025</strong></label>
+<div>
+<h2 id="main-changes-2">Main changes</h2>
+<ul>
+<li><strong>Applications</strong>
+<ul>
+<li>ST67W6X_BLE_Commissioning
+<ul>
+<li>ID 214212: Add BLE FUOTA support</li>
+<li>ID 216125: Clear security database on button push</li>
+</ul></li>
+<li>ST67W6X_BLE_p2pClient
+<ul>
+<li>ID 213161: Improve services and characteristics discovery process to use service UUID to discover p2p service</li>
+</ul></li>
+<li>ST67W6X_BLE_p2pServer
+<ul>
+<li>ID 216125: Clear security database on button push</li>
+</ul></li>
+<li>ST67W6X_CLI_LWIP
+<ul>
+<li>ID 211434: Add CLI application based on LwIP on host and ST67 T02 architecture</li>
+</ul></li>
+<li>ST67W6X_FOTA
+<ul>
+<li>ID 211255: ST67W6X_FOTA - Fix host rebooting even when no FOTA update was applied due to version check</li>
+<li>ID 214113: ST67W6X_FOTA - Remove modulo 4 constraints on buffer size when STM32 FLASH write</li>
+</ul></li>
+<li>ST67W6X_WiFi_Commissioning
+<ul>
+<li>ID 211179: Fix incorrect variable declaration that leads to unexpected behaviors</li>
+<li>ID 216918: Fix credential parsing that corrupt the password</li>
+</ul></li>
+<li>All applications
+<ul>
+<li>ID 214320: Move of API calls from W6X event callbacks to the default task due to the modem_handler task not being reentrant</li>
+</ul></li>
+</ul></li>
+<li><strong>Demonstrations</strong>
+<ul>
+<li>ST67W6X_MQTT_LWIP
+<ul>
+<li>ID 215693: Add MQTT demonstration based on LwIP on host, MQTT-C Third-Party Middleware and ST67 T02 architecture</li>
+</ul></li>
+</ul></li>
+<li><strong>Host boards</strong>
+<ul>
+<li>NUCLEO-H563ZI and NUCLEO-N657X0-Q
+<ul>
+<li>ID 212064: Keep SPI IO state configuration enabled to prevent MOSI floating line on SPI Bus</li>
+</ul></li>
+<li>NUCLEO-N657X0-Q
+<ul>
+<li>ID 217411: Add minimal 2us delay in SPI port for N6 DCache enabled</li>
+</ul></li>
+</ul></li>
+</ul>
+<h2 id="contents-2">Contents</h2>
+<p>Ten applications and two demonstrations exercising the ST67W6X_Network_Driver capabilities, and one utility.</p>
+<p>These projects are developed using the following STM32Cube and X-CUBE packages:</p>
+<ul>
+<li><p>STM32CubeH5 V1.5.0</p></li>
+<li><p>STM32CubeH7RS V1.2.0</p></li>
+<li><p>STM32CubeN6 V1.1.1</p></li>
+<li><p>STM32CubeU5 V1.7.0</p></li>
+<li><p>X-CUBE-FREERTOS V1.3.1</p></li>
+<li><p>X-CUBE-MEMS1 V11.2.0</p></li>
+<li><p><strong>Applications</strong></p>
+<ul>
+<li>ST67W6X_BLE_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Bluetooth Low Energy.</li>
+<li>ST67W6X_BLE_p2pClient : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT Client).</li>
+<li>ST67W6X_BLE_p2pServer : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT server).</li>
+<li>ST67W6X_CLI : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi and Bluetooth LE solution via command line interface (CLI).</li>
+<li>ST67W6X_CLI_LWIP : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi, Bluetooth LE and Network interface with LwIP solutions via command line interface (CLI).</li>
+<li>ST67W6X_Echo : This application demonstrates the TCP Echo feature over Wi-Fi.</li>
+<li>ST67W6X_FOTA : This application aims to demonstrate the FOTA (Firmware update Over-The-Air) feature over Wi-Fi.</li>
+<li>ST67W6X_HTTP_Server : This application aims to demonstrate an HTTP server over Network API, hosted by a device configured as a soft access point (soft-AP).</li>
+<li>ST67W6X_HTTPS_Client : This application aims to demonstrate an HTTPS Client over Network API with basic GET requests to retrieve the weather from different major capitals around the world.</li>
+<li>ST67W6X_WiFi_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Wi-Fi.</li>
+</ul></li>
+<li><p><strong>Demonstrations</strong></p>
+<ul>
+<li>ST67W6X_MQTT : This demonstration aims to demonstrate an example of MQTT client over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+<li>ST67W6X_MQTT_LWIP : This application aims to demonstrate an example of MQTT client over LwIP over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+</ul></li>
+<li><p><strong>Utilities</strong></p>
+<ul>
+<li>NCP_Loader: This application aims to flash the ST67W611M binaries and to execute the Manufacturing test over STM32 UART link.</li>
+</ul></li>
+</ul>
+<p><small>The components flagged by “<span class="icon-st-update"></span>” have changed since the previous release. “<span class="icon-st-add"></span>” are new.</small></p>
+<p><strong>Projects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Board/Component</th>
+<th>Project Category</th>
+<th style="text-align: left;">Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Demonstrations<span class="icon-st-add"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Applications<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Demonstrations<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Utilities</td>
+</tr>
+<tr>
+<td>ST67W6X_Scripts</td>
+<td>Utilities<span class="icon-st-update"></span></td>
+<td style="text-align: left;">Projects\ST67W6X_Scripts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="known-limitations-2">Known limitations</h2>
+<ul>
+<li>The Host STOP Power mode is not supported in some applications</li>
+<li>ST67W6X_CLI_LWIP: WPS connection is not working properly</li>
+</ul>
+<h2 id="development-toolchains-and-compilers-2">Development toolchains and compilers</h2>
+<ul>
+<li>IAR Embedded Workbench for Arm (EWARM) toolchain <strong>V9.30.1</strong></li>
+<li>RealView Microcontroller Development Kit (MDK-ARM) toolchain <strong>V5.39</strong></li>
+<li>STM32CubeIDE (Default GCC13 toolchain supported) <strong>V1.19.0</strong></li>
+</ul>
+<h2 id="supported-devices-and-boards-2">Supported devices and boards</h2>
+<ul>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h7s3l8.html">NUCLEO-H7S3L8</a> <em>(MB1737)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h563zi.html">NUCLEO-H563ZI</a> <em>(MB1404)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-n657x0-q.html">NUCLEO-N657X0-Q</a> <em>(MB1940)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html">NUCLEO-U575ZI-Q</a> <em>(MB1549)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+</ul>
+<h2 id="dependencies-2">Dependencies</h2>
+<p>This software release is compatible with:</p>
+<ul>
+<li>STM32CubeMX version V6.15.0</li>
+<li>STM32CubeProgrammer version V2.20.0</li>
+</ul>
+</div>
+</div>
+<div class="collapse">
+<input type="checkbox" id="collapse-section01" aria-hidden="true"> <label for="collapse-section01" aria-hidden="true"><strong>V1.0.0 / 28-May-2025</strong></label>
+<div>
+<h2 id="main-changes-3">Main changes</h2>
+<ul>
+<li><strong>First official release</strong></li>
+</ul>
+<h2 id="contents-3">Contents</h2>
+<p>Nine applications and one demonstration exercising the ST67W6X_Network_Driver capabilities, and one utility.</p>
+<p>These projects are developed using the following STM32Cube and X-CUBE packages:</p>
+<ul>
+<li><p>STM32CubeH5 V1.5.0</p></li>
+<li><p>STM32CubeH7RS V1.2.0</p></li>
+<li><p>STM32CubeN6 V1.1.1</p></li>
+<li><p>STM32CubeU5 V1.7.0</p></li>
+<li><p>X-CUBE-FREERTOS V1.3.1</p></li>
+<li><p>X-CUBE-MEMS1 V11.2.0</p></li>
+<li><p><strong>Applications</strong></p>
+<ul>
+<li>ST67W6X_BLE_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Bluetooth Low Energy.</li>
+<li>ST67W6X_BLE_p2pClient : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT Client).</li>
+<li>ST67W6X_BLE_p2pServer : This application aims to demonstrate Point-to-Point communication using Bluetooth Low Energy (as GATT server).</li>
+<li>ST67W6X_CLI : This application aims to evaluate and to test the X-NUCLEO-67W61M1 Wi-Fi and Bluetooth LE solution via command line interface (CLI).</li>
+<li>ST67W6X_Echo : This application demonstrates the TCP Echo feature over Wi-Fi.</li>
+<li>ST67W6X_FOTA : This application aims to demonstrate the FOTA (Firmware update Over-The-Air) feature over Wi-Fi.</li>
+<li>ST67W6X_HTTP_Server : This application aims to demonstrate an HTTP server over Network API, hosted by a device configured as a soft access point (soft-AP).</li>
+<li>ST67W6X_HTTPS_Client : This application aims to demonstrate an HTTPS Client over Network API with basic GET requests to retrieve the weather from different major capitals around the world.</li>
+<li>ST67W6X_WiFi_Commissioning : This application aims to demonstrate the Wi-Fi credentials commissioning over Wi-Fi.</li>
+</ul></li>
+<li><p><strong>Demonstrations</strong></p>
+<ul>
+<li>ST67W6X_MQTT : This demonstration aims to demonstrate an example of MQTT client over Wi-Fi which connects to an MQTT broker in order to publish telemetry data and receive parameter updates or commands from the cloud.</li>
+</ul></li>
+<li><p><strong>Utilities</strong></p>
+<ul>
+<li>NCP_Loader: This application aims to flash the ST67W611M binaries and to execute the Manufacturing test over STM32 UART link.</li>
+</ul></li>
+</ul>
+<p><small>The components flagged by “<span class="icon-st-update"></span>” have changed since the previous release. “<span class="icon-st-add"></span>” are new.</small></p>
+<p><strong>Projects</strong></p>
+<table>
+<thead>
+<tr>
+<th>Board/Component</th>
+<th>Project Category</th>
+<th style="text-align: left;">Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Applications</td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H7S3L8</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H7R3L8\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Applications</td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-H563ZI</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-H563ZI\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Applications</td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-N657X0-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-N657X0-Q\Utilities</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Applications</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Applications</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Demonstrations</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Demonstrations</td>
+</tr>
+<tr>
+<td>NUCLEO-U575ZI-Q</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\NUCLEO-U575ZI-Q\Utilities</td>
+</tr>
+<tr>
+<td>ST67W6X_Scripts</td>
+<td>Utilities</td>
+<td style="text-align: left;">Projects\ST67W6X_Scripts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="known-limitations-3">Known limitations</h2>
+<p>None</p>
+<h2 id="development-toolchains-and-compilers-3">Development toolchains and compilers</h2>
+<ul>
+<li>IAR Embedded Workbench for Arm (EWARM) toolchain <strong>V9.30.1</strong></li>
+<li>RealView Microcontroller Development Kit (MDK-ARM) toolchain <strong>V5.39</strong></li>
+<li>STM32CubeIDE (Default GCC13 toolchain supported) <strong>V1.18.1</strong></li>
+</ul>
+<h2 id="supported-devices-and-boards-3">Supported devices and boards</h2>
+<ul>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h7s3l8.html">NUCLEO-H7S3L8</a> <em>(MB1737)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-h563zi.html">NUCLEO-H563ZI</a> <em>(MB1404)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-n657x0-q.html">NUCLEO-N657X0-Q</a> <em>(MB1940)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+<li><a href="https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html">NUCLEO-U575ZI-Q</a> <em>(MB1549)</em> + <a href="https://www.st.com/en/evaluation-tools/x-nucleo-67w61m1.html">X-NUCLEO-67W61M1</a> <em>(MB2230)</em></li>
+</ul>
+<h2 id="dependencies-3">Dependencies</h2>
+<p>This software release is compatible with:</p>
+<ul>
+<li>STM32CubeMX version V6.14.1</li>
+<li>STM32CubeProgrammer version V2.19.0</li>
+</ul>
+</div>
+</div>
+</section>
+</div>
+<footer class="sticky">
+<div class="columns">
+<div class="column" style="width:95%;">
+<p>For complete documentation on ST, visit: <a href="http://www.st.com">www.st.com</a></p>
+</div><div class="column" style="width:5%;">
+<p><abbr title="Based on template cx566953 version 2.1">Info</abbr></p>
+</div>
+</div>
+</footer>
+</body>
+</html>
