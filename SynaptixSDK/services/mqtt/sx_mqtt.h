@@ -11,6 +11,12 @@
  *     it uses the defaults of app/app_config.h,
  *   - connects, reconnects with backoff and sends from the ST67 task.
  *
+ * Subscribe (SPLC_MQTT_SUB_ENABLE): the pump copies the topics the library wants (it may only
+ * be asked from the engine task) into a mailbox; the ST67 task subscribes / unsubscribes the
+ * difference after every (re)connect and whenever the set changes; received messages are
+ * copied in the vendor callback context into a small queue and fed to splc_mqtt_input() by
+ * the pump. The module subscribes at QoS 0 only and reports no retain flag.
+ *
  * Two contexts, never mixed (SimplePLC is single-threaded, the AT driver blocks):
  *   engine task (the one running plc_engine_poll()):  sx_mqtt_init(), sx_mqtt_pump()
  *   ST67 task                                       :  sx_mqtt_service(), sx_mqtt_notify_module_reset()
@@ -46,6 +52,14 @@
  * DEFAULT_MESSAGE on DEFAULT_TOPIC (app_config.h) once. Bring-up aid; 0 = off. */
 #ifndef SX_MQTT_HELLO_ON_DEFAULT
 #define SX_MQTT_HELLO_ON_DEFAULT 1
+#endif
+
+/* Subscribe (SPLC_MQTT_SUB_ENABLE = 1). */
+#ifndef SX_MQTT_RX_DEPTH
+#define SX_MQTT_RX_DEPTH         2U       /* ~0.23 KB each; vendor thread -> engine task */
+#endif
+#ifndef SX_MQTT_SUB_RETRY_MS
+#define SX_MQTT_SUB_RETRY_MS     5000U    /* wait before a failed (un)subscribe is tried again */
 #endif
 
 #if SPLC_MQTT_ENABLE

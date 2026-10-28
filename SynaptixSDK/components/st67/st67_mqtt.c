@@ -9,9 +9,9 @@
 #include "w6x_api.h"
 #include "w6x_types.h"
 
-/* Receive buffer the vendor needs even when nothing is subscribed (topic + message of a
- * received publish). Subscribe is not used yet; when it is, size it for the longest
- * topic + payload SimplePLC accepts (95 + 128). */
+/* Receive buffer of the vendor: '"topic"' + NUL + payload of one received publish. 256 B
+ * holds the longest topic sx_mqtt queues (96 + 2 quotes) plus a 128 B payload with room
+ * to spare; a bigger message is dropped by the vendor itself. */
 #ifndef ST67_MQTT_RX_BUF_SIZE
 #define ST67_MQTT_RX_BUF_SIZE   256U
 #endif
@@ -24,17 +24,41 @@ static volatile bool s_inited;
 static volatile bool s_connected;
 static volatile bool s_reset_seen;
 
+static volatile st67_mqtt_rx_cb_t s_rx_cb;
+static void * volatile            s_rx_ctx;
+static volatile uint32_t          s_rx_malformed;
+
 /* Vendor callback context (through the facade forwarder): flags only. */
 static void on_event(uint32_t event_id, void *event_args, void *context)
 {
-    (void)event_args;
     (void)context;
     if (event_id == W6X_MQTT_EVT_CONNECTED_ID) {
         s_connected = true;
     } else if (event_id == W6X_MQTT_EVT_DISCONNECTED_ID) {
         s_connected = false;
+    } else if (event_id == W6X_MQTT_EVT_SUBSCRIPTION_RECEIVED_ID) {
+        /* Vendor layout in s_rx: '"' topic '"' NUL payload. topic_length counts both
+         * quotes; the payload starts at topic_length + 1 and is NOT terminated. */
+        const st67_mqtt_rx_cb_t cb = s_rx_cb;
+        if (cb == NULL) {
+            return;
+        }
+        const W6X_MQTT_CbParamData_t *d = (const W6X_MQTT_CbParamData_t *)event_args;
+        if (d == NULL) {
+            s_rx_malformed++;
+            return;
+        }
+        const uint32_t tl = d->topic_length;
+        const uint32_t ml = d->message_length;
+        if (tl < 2U || tl > ST67_MQTT_RX_BUF_SIZE || ml > ST67_MQTT_RX_BUF_SIZE ||
+            (tl + 1U + ml) > ST67_MQTT_RX_BUF_SIZE ||
+            s_rx[0] != (uint8_t)'"' || s_rx[tl - 1U] != (uint8_t)'"') {
+            s_rx_malformed++;
+            return;
+        }
+        s_rx[tl - 1U] = 0U;                  /* closing quote -> NUL: the topic is s_rx + 1 */
+        cb((const char *)&s_rx[1], (const char *)&s_rx[tl + 1U], (size_t)ml, s_rx_ctx);
     }
-    /* W6X_MQTT_EVT_SUBSCRIPTION_RECEIVED_ID: ignored until Subscribe is implemented. */
 }
 
 static st67_mqtt_status_t copy_str(uint8_t *dst, size_t dst_size, const char *src)
@@ -127,6 +151,60 @@ st67_mqtt_status_t st67_mqtt_publish(const char *topic, const char *payload, siz
         return ST67_MQTT_ERR_VENDOR;
     }
     return ST67_MQTT_OK;
+}
+
+static st67_mqtt_status_t check_topic(const char *topic)
+{
+    if (topic == NULL || topic[0] == '\0') {
+        return ST67_MQTT_ERR_ARG;
+    }
+    for (size_t n = 0U; topic[n] != '\0'; n++) {
+        const char c = topic[n];
+        if (c == '"' || c == '\r' || c == '\n') {
+            return ST67_MQTT_ERR_ARG;
+        }
+        if (n >= ST67_MQTT_TOPIC_MAX) {
+            return ST67_MQTT_ERR_TOO_LONG;
+        }
+    }
+    return ST67_MQTT_OK;
+}
+
+st67_mqtt_status_t st67_mqtt_subscribe(const char *topic)
+{
+    const st67_mqtt_status_t c = check_topic(topic);
+    if (c != ST67_MQTT_OK) {
+        return c;
+    }
+    if (!s_inited) {
+        return ST67_MQTT_ERR_NOT_INIT;
+    }
+    return (W6X_MQTT_Subscribe((uint8_t *)(uintptr_t)topic) == W6X_STATUS_OK) ? ST67_MQTT_OK
+                                                                              : ST67_MQTT_ERR_VENDOR;
+}
+
+st67_mqtt_status_t st67_mqtt_unsubscribe(const char *topic)
+{
+    const st67_mqtt_status_t c = check_topic(topic);
+    if (c != ST67_MQTT_OK) {
+        return c;
+    }
+    if (!s_inited) {
+        return ST67_MQTT_ERR_NOT_INIT;
+    }
+    return (W6X_MQTT_Unsubscribe((uint8_t *)(uintptr_t)topic) == W6X_STATUS_OK) ? ST67_MQTT_OK
+                                                                                : ST67_MQTT_ERR_VENDOR;
+}
+
+void st67_mqtt_set_rx_cb(st67_mqtt_rx_cb_t cb, void *context)
+{
+    s_rx_ctx = context;
+    s_rx_cb  = cb;
+}
+
+uint32_t st67_mqtt_rx_malformed(void)
+{
+    return s_rx_malformed;
 }
 
 bool st67_mqtt_is_connected(void)

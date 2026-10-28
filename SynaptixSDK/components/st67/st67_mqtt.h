@@ -12,8 +12,11 @@
  *
  * Limits of the vendor API (read in w6x_types.h, not assumed):
  *   host 63 chars, client id / user / password 31 chars each (a longer string is refused,
- *   never truncated), one topic per subscribe, no retain/QoS flag on received messages,
- *   MQTT 3.1.1 only, TLS needs PEM strings in MCU RAM (not supported by this wrapper yet).
+ *   never truncated), one topic per subscribe and ALWAYS at QoS 0 (W61_MQTT_Subscribe
+ *   hard-codes it), no retain/QoS flag on received messages, MQTT 3.1.1 only, TLS needs PEM
+ *   strings in MCU RAM (not supported by this wrapper yet).
+ *   A received message must fit ST67_MQTT_RX_BUF_SIZE as '"topic"' + NUL + payload; the vendor
+ *   drops a bigger one before the application sees it.
  */
 #ifndef ST67_MQTT_H
 #define ST67_MQTT_H
@@ -28,6 +31,7 @@ extern "C" {
 
 #define ST67_MQTT_HOST_MAX   63U
 #define ST67_MQTT_CRED_MAX   31U
+#define ST67_MQTT_TOPIC_MAX  95U     /* longest topic accepted by subscribe / unsubscribe */
 
 typedef enum {
     ST67_MQTT_OK           =  0,
@@ -60,6 +64,24 @@ st67_mqtt_status_t st67_mqtt_disconnect(void);
 /* qos 0..2. payload need not be NUL-terminated. */
 st67_mqtt_status_t st67_mqtt_publish(const char *topic, const char *payload, size_t len,
                                      uint8_t qos, bool retain);
+
+/* Subscribe / unsubscribe one topic (filters with + and # are fine). Requires a live session.
+ * ST67 task only. ST67_MQTT_ERR_ARG for an empty topic or one with '"', CR or LF (it would
+ * corrupt the AT command); ST67_MQTT_ERR_TOO_LONG above ST67_MQTT_TOPIC_MAX. The vendor
+ * subscribes at QoS 0 only. */
+st67_mqtt_status_t st67_mqtt_subscribe(const char *topic);
+st67_mqtt_status_t st67_mqtt_unsubscribe(const char *topic);
+
+/* Received-message hook. Runs in the VENDOR callback context (the AT receive task): it must
+ * not block and must copy what it needs, because topic and payload point into the vendor
+ * buffer that the next message overwrites. topic is NUL-terminated and without quotes; the
+ * payload is NOT terminated. There is no retain flag (the vendor does not report it).
+ * NULL removes the hook. Safe to call before st67_mqtt_init(). */
+typedef void (*st67_mqtt_rx_cb_t)(const char *topic, const char *payload, size_t len, void *context);
+void st67_mqtt_set_rx_cb(st67_mqtt_rx_cb_t cb, void *context);
+
+/* Messages the vendor reported but this layer could not hand over (bad framing). Any task. */
+uint32_t st67_mqtt_rx_malformed(void);
 
 /* Last connection state from the module events. Any task. */
 bool st67_mqtt_is_connected(void);

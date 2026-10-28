@@ -40,11 +40,11 @@
 /* No ADC in this CubeMX project (no hadc1), and the board has 0 AI. */
 #define SPLC_ADC_BUILTIN              0
 
-/* Features. MQTT publish runs through SynaptixSDK/services/mqtt + components/st67 (the MQTT
- * client inside the ST67 module). MQTT Subscribe, MQTT TLS and HTTP(S) are not written yet;
+/* Features. MQTT publish + subscribe run through SynaptixSDK/services/mqtt + components/st67
+ * (the MQTT client inside the ST67 module). MQTT TLS and HTTP(S) are not written yet;
  * the only RS485 port is the App link, so Modbus master (MB_READ/MB_WRITE) is off. */
 #define SPLC_MQTT_ENABLE              1
-#define SPLC_MQTT_SUB_ENABLE          0
+#define SPLC_MQTT_SUB_ENABLE          1
 #define SPLC_MBM_ENABLE               0
 #define SPLC_MBW_ENABLE               0
 #define SPLC_REAL_ENABLE              1
