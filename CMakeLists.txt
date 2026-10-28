@@ -37,6 +37,10 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# SynaptixSDK: SimplePLC + ST67W611 Wi-Fi + board glue. Split in modules
+# (libs, components, services, ports, app); app/ attaches them to the executable.
+add_subdirectory(SynaptixSDK)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths

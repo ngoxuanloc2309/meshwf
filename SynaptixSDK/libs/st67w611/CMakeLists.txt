@@ -16,6 +16,10 @@ else()
     target_compile_definitions(st67w611 PUBLIC ST67_ARCH=2)
 endif()
 
+# Backend file names are lower case (st67w611_backend_t01.c): Windows does not care,
+# Linux does.
+string(TOLOWER "${ST67W611_ARCH}" ST67W611_ARCH_LC)
+
 if(NOT EXISTS "${ST67W611_VENDOR_DIR}/Middlewares/ST/ST67W6X_Network_Driver")
     message(FATAL_ERROR "ST67W611 vendor driver not found: ${ST67W611_VENDOR_DIR}")
 endif()
@@ -48,7 +52,7 @@ target_sources(st67w611 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/st67w611.c
     ${CMAKE_CURRENT_SOURCE_DIR}/port/src/st67w611_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/port/src/st67w611_vendor_bridge.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/st67w611_backend_${ST67W611_ARCH}.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/st67w611_backend_${ST67W611_ARCH_LC}.c
 )
 
 # Only our facade and port/config headers are public. Vendor headers remain

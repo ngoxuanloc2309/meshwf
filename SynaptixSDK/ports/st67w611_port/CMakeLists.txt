@@ -1,15 +1,8 @@
 # st67w611_port - board adapter of libs/st67w611 for the meshwf board (SPI1).
 #
-# Not yet configured/built in this repo: the top-level CMakeLists.txt does not
-# add SynaptixSDK yet. Intended use (AT mode, no lwIP):
-#
-#   set(ST67W611_ARCH T01 CACHE STRING "" FORCE)   # module-side network (AT sockets)
-#   add_subdirectory(SynaptixSDK/libs/st67w611)
-#   add_subdirectory(SynaptixSDK/ports/st67w611_port)
-#   target_link_libraries(${CMAKE_PROJECT_NAME} st67w611_port)
-#
-# The executable must also link splc_platform_stm32h5 (Layer 0 of simple_plc),
-# which supplies sx_spi_* / sx_gpio_* used by st67w611_spi_port.c.
+# Added by SynaptixSDK/ports/CMakeLists.txt; libs/CMakeLists.txt has already
+# forced ST67W611_ARCH=T01 (AT mode, no lwIP). It links `splc` because
+# st67w611_spi_port.c uses sx_spi_* / sx_gpio_* of simple_plc's Layer 0.
 add_library(st67w611_port STATIC
     st67w611_spi_port.c
     st67w611_wifi_switch.c
@@ -30,6 +23,6 @@ target_include_directories(st67w611_port PRIVATE
 )
 
 target_link_libraries(st67w611_port
-    PUBLIC  st67w611
+    PUBLIC  st67w611 splc
     PRIVATE stm32cubemx
 )

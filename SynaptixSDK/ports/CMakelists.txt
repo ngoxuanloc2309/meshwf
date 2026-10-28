@@ -1,0 +1,9 @@
+# ports - board glue. Exposes one INTERFACE target: sx_ports.
+#
+#   st67w611_port  SPI1 transport + wifi_switch + soft_reset of libs/st67w611
+#   splc_port      starts SimplePLC and the ST67 task (OBJECT library, see app/)
+add_subdirectory(st67w611_port)
+add_subdirectory(splc_port)
+
+add_library(sx_ports INTERFACE)
+target_link_libraries(sx_ports INTERFACE st67w611_port)
