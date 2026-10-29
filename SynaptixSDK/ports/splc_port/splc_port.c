@@ -1,5 +1,6 @@
 #include "splc_port.h"
 #include "splc_wifi_port.h"
+#include "splc_rtc_port.h"
 #include "sx_mqtt.h"
 
 #include <stdint.h>
@@ -71,6 +72,7 @@ static void splc_task(void *arg)
 
     sx_mqtt_init();      /* register the publish callback BEFORE the engine starts (plc_mqtt.h) */
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
+    splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
 
     for (;;) {
