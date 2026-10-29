@@ -1,4 +1,10 @@
 #include "st67_mqtt.h"
+#include "splc_opt.h"
+#if SPLC_MQTT_TLS_CERT_ENABLE
+#include "st67_cert_store.h"
+#endif
+#include "splc_log.h"
+#include "logger.h"
 
 #include <string.h>
 
@@ -19,6 +25,8 @@
 static uint8_t            s_rx[ST67_MQTT_RX_BUF_SIZE];
 static W6X_MQTT_Data_t    s_rx_desc = { s_rx, ST67_MQTT_RX_BUF_SIZE };
 static W6X_MQTT_Connect_t s_vendor_cfg;          /* ~0.6 KB, static: the ST67 stack is 4 KB */
+
+static const char *TAG = "ST67_MQTT";
 
 static volatile bool s_inited;
 static volatile bool s_connected;
@@ -71,6 +79,67 @@ static st67_mqtt_status_t copy_str(uint8_t *dst, size_t dst_size, const char *sr
     return ST67_MQTT_OK;
 }
 
+#if SPLC_MQTT_TLS_CERT_ENABLE
+/* Names of the files the vendor writes into the module's file system (<= 31 chars). None is a
+ * prefix of another: the vendor matches existing files with strncmp(name, listed, strlen(name)). */
+#define TLS_FILE_CA     "splc_ca.pem"
+#define TLS_FILE_CERT   "splc_cert.pem"
+#define TLS_FILE_KEY    "splc_key.pem"
+
+/* Fill the TLS part of the vendor config from the certificate store. On ST67_MQTT_OK the store
+ * is HELD (acquire) and the content pointers point into Flash: the caller must call
+ * tls_detach() as soon as W6X_MQTT_Configure() returned (the vendor copies the PEM into the
+ * module there), so the engine task can erase the sector again. */
+static st67_mqtt_status_t tls_attach(W6X_MQTT_Connect_t *v, const char *host)
+{
+    if (!st67_cert_store_acquire()) {
+        log_warn(TAG, "TLS: certificate store busy (being rewritten), try again later");
+        return ST67_MQTT_ERR_CERT;
+    }
+    const char *ca   = st67_cert_store_get(ST67_CERT_ROOT_CA, NULL);
+    const char *cert = st67_cert_store_get(ST67_CERT_CLIENT_CERT, NULL);
+    const char *key  = st67_cert_store_get(ST67_CERT_CLIENT_KEY, NULL);
+
+    if (ca == NULL) {
+        st67_cert_store_release();
+        log_warn(TAG, "TLS: no Root CA stored, refusing to connect (the server cannot be verified)");
+        return ST67_MQTT_ERR_CERT;
+    }
+    if ((cert == NULL) != (key == NULL)) {
+        st67_cert_store_release();
+        log_warn(TAG, "TLS: client %s stored without the client %s, refusing to connect",
+                 (cert != NULL) ? "certificate" : "key", (cert != NULL) ? "key" : "certificate");
+        return ST67_MQTT_ERR_CERT;
+    }
+    if (copy_str(v->SNI, sizeof(v->SNI), host) != ST67_MQTT_OK ||
+        copy_str(v->CACertificateName, sizeof(v->CACertificateName), TLS_FILE_CA) != ST67_MQTT_OK) {
+        st67_cert_store_release();
+        return ST67_MQTT_ERR_TOO_LONG;
+    }
+    v->CACertificateContent = (char *)(uintptr_t)ca;     /* the vendor only reads it */
+    v->Scheme               = 2U;
+    if (cert != NULL) {
+        if (copy_str(v->CertificateName, sizeof(v->CertificateName), TLS_FILE_CERT) != ST67_MQTT_OK ||
+            copy_str(v->PrivateKeyName, sizeof(v->PrivateKeyName), TLS_FILE_KEY) != ST67_MQTT_OK) {
+            st67_cert_store_release();
+            return ST67_MQTT_ERR_TOO_LONG;
+        }
+        v->CertificateContent = (char *)(uintptr_t)cert;
+        v->PrivateKeyContent  = (char *)(uintptr_t)key;
+        v->Scheme             = 4U;
+    }
+    return ST67_MQTT_OK;
+}
+
+static void tls_detach(W6X_MQTT_Connect_t *v)
+{
+    v->CACertificateContent = NULL;
+    v->CertificateContent   = NULL;
+    v->PrivateKeyContent    = NULL;
+    st67_cert_store_release();
+}
+#endif /* SPLC_MQTT_TLS_CERT_ENABLE */
+
 st67_mqtt_status_t st67_mqtt_init(void)
 {
     s_connected = false;
@@ -107,7 +176,26 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     /* Last Will: left empty (decision: later). */
 
     s_connected = false;
-    if (W6X_MQTT_Configure(&s_vendor_cfg) != W6X_STATUS_OK) {
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    if (cfg->use_tls) {
+        const st67_mqtt_status_t t = tls_attach(&s_vendor_cfg, cfg->host);
+        if (t != ST67_MQTT_OK) {
+            return t;
+        }
+    }
+#else
+    if (cfg->use_tls) {
+        log_warn(TAG, "TLS requested but SPLC_MQTT_TLS_CERT_ENABLE is 0");
+        return ST67_MQTT_ERR_CERT;
+    }
+#endif
+    const W6X_Status_t conf = W6X_MQTT_Configure(&s_vendor_cfg);
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    if (cfg->use_tls) {
+        tls_detach(&s_vendor_cfg);       /* the PEM is in the module now; free the sector */
+    }
+#endif
+    if (conf != W6X_STATUS_OK) {
         return ST67_MQTT_ERR_VENDOR;
     }
     if (W6X_MQTT_Connect(&s_vendor_cfg) != W6X_STATUS_OK) {

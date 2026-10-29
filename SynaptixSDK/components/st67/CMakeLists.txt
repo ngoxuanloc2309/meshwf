@@ -7,6 +7,7 @@ set(ST67_VENDOR_DRV "${ST67W611_VENDOR_DIR}/Middlewares/ST/ST67W6X_Network_Drive
 
 add_library(sx_st67 STATIC
     st67_mqtt.c
+    st67_cert_store.c
     ${ST67_VENDOR_DRV}/Core/w6x_mqtt.c
     ${ST67_VENDOR_DRV}/Driver/W61_at/w61_at_mqtt.c
 )
@@ -28,4 +29,4 @@ target_include_directories(sx_st67 PRIVATE
     ${ST67_VENDOR_DRV}/Utils/Misc
 )
 
-target_link_libraries(sx_st67 PUBLIC st67w611 PRIVATE stm32cubemx)
+target_link_libraries(sx_st67 PUBLIC st67w611 splc PRIVATE stm32cubemx)

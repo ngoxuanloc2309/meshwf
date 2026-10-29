@@ -12,6 +12,10 @@
 #include "splc_log.h"
 #include "logger.h"
 #include "st67_mqtt.h"
+#if SPLC_MQTT_TLS_CERT_ENABLE
+#include "plc_mqtt_tls.h"
+#include "st67_cert_store.h"
+#endif
 #if SPLC_MQTT_SUB_ENABLE
 #include "plc_mqtt_sub.h"
 #endif
@@ -96,6 +100,7 @@ static box_t s_box;
 static volatile bool     s_conn_valid;
 static volatile uint32_t s_conn_generation;
 static volatile uint16_t s_last_error;
+static volatile bool     s_conn_tls;        /* the live session runs over TLS */
 
 static void fill_default(st67_mqtt_config_t *c)
 {
@@ -111,10 +116,12 @@ static void fill_default(st67_mqtt_config_t *c)
  * keeps the default broker, like the gateway does. */
 static bool convert_app(const splc_mqtt_broker_t *b, st67_mqtt_config_t *c)
 {
+#if !SPLC_MQTT_TLS_CERT_ENABLE
     if (b->use_tls) {
-        log_warn(TAG, "App broker asks for TLS: not supported yet, using the default broker");
+        log_warn(TAG, "App broker asks for TLS: SPLC_MQTT_TLS_CERT_ENABLE is 0, using the default broker");
         return false;
     }
+#endif
     if (strlen(b->host) > ST67_MQTT_HOST_MAX || strlen(b->client_id) > ST67_MQTT_CRED_MAX ||
         strlen(b->username) > ST67_MQTT_CRED_MAX || strlen(b->password) > ST67_MQTT_CRED_MAX) {
         log_warn(TAG, "App broker strings exceed the module limits (host %u, others %u): "
@@ -131,7 +138,9 @@ static bool convert_app(const splc_mqtt_broker_t *b, st67_mqtt_config_t *c)
     strcpy(c->password, b->password);
     /* An empty client id would let the module pick one; keep it stable instead. */
     strcpy(c->client_id, (b->client_id[0] != '\0') ? b->client_id : BROKER_DEFAULT_DEVICEID);
-    c->port          = (b->port != 0U) ? b->port : (uint16_t)BROKER_DEFAULT_PORT;
+    c->use_tls       = (b->use_tls != 0U);      /* certificates are read at connect time */
+    c->port          = (b->port != 0U) ? b->port
+                                       : (c->use_tls ? 8883U : (uint16_t)BROKER_DEFAULT_PORT);
     c->keepalive_sec = b->keepalive_sec;
     c->clean_session = b->clean_session;
     return true;
@@ -278,6 +287,55 @@ static bool     s_have_last;
 static bool     s_last_app;
 static uint32_t s_last_gen;
 static uint32_t s_seq;
+#if SPLC_MQTT_TLS_CERT_ENABLE
+static uint32_t s_last_cert_gen;
+static bool     s_last_use_tls;      /* the target built last asks for TLS */
+#endif
+
+#if SPLC_MQTT_TLS_CERT_ENABLE
+/* ------------------------------------------------------------------------------------ */
+/* Certificate upload (MQTT_003): the library checks each chunk and hands it to these      */
+/* functions, which feed st67_cert_store. All of them run in the ENGINE task (the store's  */
+/* writer side must be a single task). Return 0 = ok, 2 = no room, other = storage error;  */
+/* the store's ERR_BUSY (a reader holds the sector) therefore shows as STATUS 3 and the    */
+/* App simply retries.                                                                      */
+/* ------------------------------------------------------------------------------------ */
+static int tls_begin(void *ctx, uint8_t type, uint8_t total_chunks, uint16_t total_size)
+{
+    (void)ctx; (void)total_chunks;
+    return st67_cert_store_begin(type, total_size);
+}
+static int tls_chunk(void *ctx, uint8_t type, uint8_t index, const uint8_t *data, uint8_t len)
+{
+    (void)ctx;
+    return st67_cert_store_chunk(type, index, data, len);
+}
+static int tls_commit(void *ctx, uint8_t type)
+{
+    (void)ctx;
+    const int rc = st67_cert_store_commit(type);
+    if (rc == 0) {
+        log_info(TAG, "certificate type %u stored (active mask 0x%02X)", (unsigned)type,
+                 (unsigned)st67_cert_store_mask());
+    }
+    return rc;
+}
+static void tls_abort(void *ctx)
+{
+    (void)ctx;
+    st67_cert_store_abort();
+}
+static void tls_clear(void *ctx)
+{
+    (void)ctx;
+    st67_cert_store_clear();
+}
+static uint16_t tls_mask(void *ctx)
+{
+    (void)ctx;
+    return st67_cert_store_mask();
+}
+#endif /* SPLC_MQTT_TLS_CERT_ENABLE */
 
 void sx_mqtt_init(void)
 {
@@ -285,6 +343,14 @@ void sx_mqtt_init(void)
         log_error(TAG, "splc_mqtt_register failed");
     }
     splc_mqtt_set_default_device_name(BROKER_DEFAULT_DEVICEID);
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    st67_cert_store_init();
+    const splc_mqtt_tls_ops_t tls_ops = { NULL, tls_begin, tls_chunk, tls_commit, tls_abort,
+                                          tls_clear, tls_mask };
+    if (!splc_mqtt_tls_register(&tls_ops)) {
+        log_error(TAG, "splc_mqtt_tls_register failed");
+    }
+#endif
 #if SPLC_MQTT_SUB_ENABLE
     st67_mqtt_set_rx_cb(rx_cb, NULL);
 #endif
@@ -294,6 +360,9 @@ void sx_mqtt_pump(uint32_t now_ms)
 {
 #if SPLC_MQTT_SUB_ENABLE
     rx_drain(now_ms);                    /* cheap when idle; not throttled so messages are not delayed */
+#endif
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    st67_cert_store_service();           /* runs a clear that waited for a reader */
 #endif
     if (!s_pump_first && (int32_t)(now_ms - s_pump_next_ms) < 0) {
         return;
@@ -307,12 +376,23 @@ void sx_mqtt_pump(uint32_t now_ms)
     uint32_t gen = 0U;
     splc_mqtt_get_broker(&b, &app, &gen);
 
-    if (!s_have_last || app != s_last_app || gen != s_last_gen) {
+    bool cert_changed = false;
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    {   /* a new/removed certificate matters only while the target broker uses TLS */
+        const uint32_t cg = st67_cert_store_generation();
+        cert_changed   = (cg != s_last_cert_gen) && s_last_use_tls;
+        s_last_cert_gen = cg;
+    }
+#endif
+    if (!s_have_last || app != s_last_app || gen != s_last_gen || cert_changed) {
         st67_mqtt_config_t cfg;
         const bool use_app = app && convert_app(&b, &cfg);
         if (!use_app) {
             fill_default(&cfg);
         }
+#if SPLC_MQTT_TLS_CERT_ENABLE
+        s_last_use_tls = cfg.use_tls;
+#endif
         s_have_last = true;
         s_last_app  = app;
         s_last_gen  = gen;
@@ -326,8 +406,8 @@ void sx_mqtt_pump(uint32_t now_ms)
         s_box.valid      = true;
         taskEXIT_CRITICAL();
 
-        log_info(TAG, "target broker %s:%u (%s), generation %u", cfg.host, (unsigned)cfg.port,
-                 use_app ? "from App" : "default", (unsigned)gen);
+        log_info(TAG, "target broker %s:%u (%s%s), generation %u", cfg.host, (unsigned)cfg.port,
+                 use_app ? "from App" : "default", cfg.use_tls ? ", TLS" : "", (unsigned)gen);
     }
 
 #if SPLC_MQTT_SUB_ENABLE
@@ -340,6 +420,9 @@ void sx_mqtt_pump(uint32_t now_ms)
     memset(&st, 0, sizeof(st));
     const bool up = s_conn_valid && st67_mqtt_is_connected();
     st.flags      = up ? SPLC_MQTT_STATUS_CONNECTED : 0U;
+    if (up && s_conn_tls) {
+        st.flags |= SPLC_MQTT_STATUS_TLS_ACTIVE;
+    }
     st.generation = s_conn_generation;
     st.last_error = up ? 0U : s_last_error;
     splc_mqtt_set_status(&st);
@@ -353,6 +436,7 @@ typedef enum { S_IDLE, S_CONNECTED, S_BACKOFF } state_t;
 
 static state_t  s_state = S_IDLE;
 static uint32_t s_conn_seq;
+static uint32_t s_try_seq;             /* box.seq of the last connection attempt */
 static uint32_t s_backoff_ms = SX_MQTT_BACKOFF_MIN_MS;
 static uint32_t s_next_try_ms;
 static bool     s_hello_pending;
@@ -468,6 +552,7 @@ static void go_down(uint32_t now_ms, uint16_t err, bool backoff)
     sub_session_reset();
 #endif
     s_conn_valid = false;
+    s_conn_tls   = false;
     s_last_error = err;
     queue_clear();
     if (backoff) {
@@ -495,8 +580,9 @@ static void try_connect(uint32_t now_ms)
     if (!box_snapshot(&box)) {
         return;                          /* the engine task has not delivered a target yet */
     }
-    log_info(TAG, "connecting to %s:%u (%s)", box.cfg.host, (unsigned)box.cfg.port,
-             box.from_app ? "App" : "default");
+    s_try_seq = box.seq;
+    log_info(TAG, "connecting to %s:%u (%s%s)", box.cfg.host, (unsigned)box.cfg.port,
+             box.from_app ? "App" : "default", box.cfg.use_tls ? ", TLS" : "");
 
     const st67_mqtt_status_t r = st67_mqtt_connect(&box.cfg, SX_MQTT_CONNECT_TIMEOUT_MS);
     if (r != ST67_MQTT_OK) {
@@ -506,6 +592,7 @@ static void try_connect(uint32_t now_ms)
     }
     s_conn_seq        = box.seq;
     s_conn_generation = box.generation;
+    s_conn_tls        = box.cfg.use_tls;
     s_conn_valid      = true;
     s_last_error      = 0U;
     s_state           = S_CONNECTED;
@@ -572,11 +659,21 @@ void sx_mqtt_service(uint32_t now_ms, bool link_up)
         try_connect(now_ms);
         break;
 
-    case S_BACKOFF:
-        if ((int32_t)(now_ms - s_next_try_ms) >= 0) {
+    case S_BACKOFF: {
+        /* A new target (App broker or certificate changed) is worth trying at once instead of
+         * waiting out a backoff that was earned by the OLD target. */
+        uint32_t seq;
+        taskENTER_CRITICAL();
+        seq = s_box.seq;
+        taskEXIT_CRITICAL();
+        if (seq != s_try_seq) {
+            s_backoff_ms = SX_MQTT_BACKOFF_MIN_MS;
+            try_connect(now_ms);
+        } else if ((int32_t)(now_ms - s_next_try_ms) >= 0) {
             try_connect(now_ms);
         }
         break;
+    }
 
     case S_CONNECTED: {
         if (!st67_mqtt_is_connected()) {

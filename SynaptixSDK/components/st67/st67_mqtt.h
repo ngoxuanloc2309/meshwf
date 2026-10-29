@@ -14,7 +14,8 @@
  *   host 63 chars, client id / user / password 31 chars each (a longer string is refused,
  *   never truncated), one topic per subscribe and ALWAYS at QoS 0 (W61_MQTT_Subscribe
  *   hard-codes it), no retain/QoS flag on received messages, MQTT 3.1.1 only, TLS needs PEM
- *   strings in MCU RAM (not supported by this wrapper yet).
+ *   strings in memory the MCU can address: this wrapper takes them straight from
+ *   st67_cert_store (memory-mapped Flash, NUL terminated), see use_tls below.
  *   A received message must fit ST67_MQTT_RX_BUF_SIZE as '"topic"' + NUL + payload; the vendor
  *   drops a bigger one before the application sees it.
  */
@@ -39,7 +40,9 @@ typedef enum {
     ST67_MQTT_ERR_TOO_LONG = -2,   /* a string is longer than the module accepts */
     ST67_MQTT_ERR_NOT_INIT = -3,   /* st67_mqtt_init() did not succeed yet */
     ST67_MQTT_ERR_VENDOR   = -4,   /* the module / vendor driver refused the command */
-    ST67_MQTT_ERR_TIMEOUT  = -5    /* no CONNECTED event in time */
+    ST67_MQTT_ERR_TIMEOUT  = -5,   /* no CONNECTED event in time */
+    ST67_MQTT_ERR_CERT     = -6    /* use_tls but the certificate set is missing / inconsistent /
+                                    * temporarily unreadable (reason logged) */
 } st67_mqtt_status_t;
 
 typedef struct {
@@ -50,13 +53,20 @@ typedef struct {
     char     password[ST67_MQTT_CRED_MAX + 1U];
     uint16_t keepalive_sec;                        /* 0 = module default (120 s) */
     bool     clean_session;
+    /* TLS (the certificates come from st67_cert_store, not from this struct):
+     *   Root CA stored, no client cert/key  -> vendor scheme 2 (server verified);
+     *   Root CA + client cert + client key  -> scheme 4 (mutual TLS);
+     * anything else (no Root CA, or only one of cert/key) -> ST67_MQTT_ERR_CERT, nothing is sent.
+     * A Root CA is REQUIRED: scheme 3 (client cert without verifying the server) is never used.
+     * The host name doubles as SNI. Username/password are still passed to the module. */
+    bool     use_tls;
 } st67_mqtt_config_t;
 
 /* Hook the facade event and give the vendor its receive buffer. Call after
  * st67w611_start() succeeded, and again after a module reset. */
 st67_mqtt_status_t st67_mqtt_init(void);
 
-/* Configure + connect. Blocks until the module reports CONNECTED or timeout_ms elapsed
+/* Configure + connect (with TLS when cfg->use_tls). Blocks until the module reports CONNECTED or timeout_ms elapsed
  * (then it disconnects again). The caller must have an IP address. */
 st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t timeout_ms);
 st67_mqtt_status_t st67_mqtt_disconnect(void);
