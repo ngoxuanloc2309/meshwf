@@ -71,6 +71,14 @@ st67_mqtt_status_t st67_mqtt_init(void);
 st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t timeout_ms);
 st67_mqtt_status_t st67_mqtt_disconnect(void);
 
+/* Delete the three TLS files (splc_ca.pem, splc_cert.pem, splc_key.pem) the vendor wrote into the
+ * module's file system when it connected with TLS; the private key stays there otherwise.
+ * Lists the module's files, deletes ours, lists again and checks they are gone.
+ * ST67_MQTT_OK = none of them is in the module any more (absent files count as gone);
+ * ST67_MQTT_ERR_VENDOR = the module refused or a file survived (call again later).
+ * ST67 task only, module up. Without SPLC_MQTT_TLS_CERT_ENABLE it does nothing and returns OK. */
+st67_mqtt_status_t st67_mqtt_wipe_certs(void);
+
 /* qos 0..2. payload need not be NUL-terminated. */
 st67_mqtt_status_t st67_mqtt_publish(const char *topic, const char *payload, size_t len,
                                      uint8_t qos, bool retain);

@@ -214,6 +214,52 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     return ST67_MQTT_OK;
 }
 
+st67_mqtt_status_t st67_mqtt_wipe_certs(void)
+{
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    static const char *const names[3] = { TLS_FILE_CA, TLS_FILE_CERT, TLS_FILE_KEY };
+    W6X_FS_FilesListFull_t *list = NULL;
+    st67_mqtt_status_t      st   = ST67_MQTT_OK;
+
+    if (W6X_FS_ListFiles(&list) != W6X_STATUS_OK || list == NULL) {
+        return ST67_MQTT_ERR_VENDOR;
+    }
+    for (uint32_t k = 0U; k < 3U; k++) {
+        bool found = false;
+        for (uint32_t i = 0U; i < list->ncp_files_list.nb_files && i < W6X_SYS_FS_MAX_FILES; i++) {
+            /* same match rule as the vendor's own overwrite check */
+            if (strncmp(list->ncp_files_list.filename[i], names[k], strlen(names[k])) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            char name[W6X_SYS_FS_FILENAME_SIZE];
+            (void)memset(name, 0, sizeof(name));
+            (void)strncpy(name, names[k], sizeof(name) - 1U);
+            if (W6X_FS_DeleteFile(name) != W6X_STATUS_OK) {
+                st = ST67_MQTT_ERR_VENDOR;
+            }
+        }
+    }
+    /* Do not trust the delete status alone: look again. */
+    list = NULL;
+    if (W6X_FS_ListFiles(&list) != W6X_STATUS_OK || list == NULL) {
+        return ST67_MQTT_ERR_VENDOR;
+    }
+    for (uint32_t k = 0U; k < 3U; k++) {
+        for (uint32_t i = 0U; i < list->ncp_files_list.nb_files && i < W6X_SYS_FS_MAX_FILES; i++) {
+            if (strncmp(list->ncp_files_list.filename[i], names[k], strlen(names[k])) == 0) {
+                st = ST67_MQTT_ERR_VENDOR;
+            }
+        }
+    }
+    return st;
+#else
+    return ST67_MQTT_OK;
+#endif
+}
+
 st67_mqtt_status_t st67_mqtt_disconnect(void)
 {
     if (!s_inited) {

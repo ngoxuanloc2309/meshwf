@@ -293,6 +293,17 @@ static bool     s_last_use_tls;      /* the target built last asks for TLS */
 #endif
 
 #if SPLC_MQTT_TLS_CERT_ENABLE
+/* The module keeps a copy of every PEM it was given, the private key included. After a clear the
+ * copies are deleted by the ST67 task (the module is only touched from there). The flag is lost on
+ * a power cut, so once per boot the same wipe runs when the store holds no client key. */
+#define WIPE_RETRY_MS     10000U
+#define WIPE_MAX_TRIES    5U
+#define CERT_BIT_KEY      (1U << (ST67_CERT_CLIENT_KEY - 1U))
+static volatile bool s_wipe_pending;
+static bool          s_boot_wipe_checked;
+static uint8_t       s_wipe_tries;
+static uint32_t      s_wipe_next_ms;
+
 /* ------------------------------------------------------------------------------------ */
 /* Certificate upload (MQTT_003): the library checks each chunk and hands it to these      */
 /* functions, which feed st67_cert_store. All of them run in the ENGINE task (the store's  */
@@ -329,6 +340,7 @@ static void tls_clear(void *ctx)
 {
     (void)ctx;
     st67_cert_store_clear();
+    s_wipe_pending = true;               /* the ST67 task deletes the copies inside the module */
 }
 static uint16_t tls_mask(void *ctx)
 {
@@ -632,6 +644,43 @@ static void send_one(void)
     taskEXIT_CRITICAL();
 }
 
+#if SPLC_MQTT_TLS_CERT_ENABLE
+/* ST67 task. Returns quickly when there is nothing to do. */
+static void module_wipe_service(uint32_t now_ms)
+{
+    if (!s_boot_wipe_checked) {
+        s_boot_wipe_checked = true;
+        if ((st67_cert_store_mask() & CERT_BIT_KEY) == 0U) {
+            s_wipe_pending = true;
+        }
+    }
+    if (!s_wipe_pending) {
+        return;
+    }
+    if (s_state == S_CONNECTED && s_conn_tls) {
+        return;                          /* never under a live TLS session: the change forces a reconnect */
+    }
+    if (s_wipe_tries != 0U && (int32_t)(now_ms - s_wipe_next_ms) < 0) {
+        return;
+    }
+    s_wipe_pending = false;              /* a clear that arrives during the call sets it again */
+    if (st67_mqtt_wipe_certs() == ST67_MQTT_OK) {
+        s_wipe_tries = 0U;
+        log_info(TAG, "TLS files removed from the module");
+        return;
+    }
+    if (++s_wipe_tries >= WIPE_MAX_TRIES) {
+        s_wipe_tries = 0U;
+        log_error(TAG, "could not remove the TLS files from the module, giving up until the next clear/boot");
+        return;
+    }
+    s_wipe_pending = true;
+    s_wipe_next_ms = now_ms + WIPE_RETRY_MS;
+    log_warn(TAG, "removing the TLS files from the module failed, retry %u/%u", (unsigned)s_wipe_tries,
+             (unsigned)WIPE_MAX_TRIES);
+}
+#endif
+
 void sx_mqtt_service(uint32_t now_ms, bool link_up)
 {
     if (s_module_reset) {                /* the module restarted: the session is gone */
@@ -654,6 +703,9 @@ void sx_mqtt_service(uint32_t now_ms, bool link_up)
         }
     }
 
+#if SPLC_MQTT_TLS_CERT_ENABLE
+    module_wipe_service(now_ms);
+#endif
     switch (s_state) {
     case S_IDLE:
         try_connect(now_ms);
