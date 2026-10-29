@@ -42,12 +42,12 @@
 
 /* Features. MQTT publish + subscribe run through SynaptixSDK/services/mqtt + components/st67
  * (the MQTT client inside the ST67 module). MQTT TLS certificates live in components/st67/st67_cert_store; HTTP(S) is not written yet;
- * the only RS485 port is the App link, so Modbus master (MB_READ/MB_WRITE) is off. */
+ * Modbus master (MB_READ/MB_WRITE) runs on USART1, the only RS485 port, so the App link is USB (SPLC_PORT_USB_CDC 1). */
 #define SPLC_MQTT_ENABLE              1
 #define SPLC_MQTT_SUB_ENABLE          1
 #define SPLC_MQTT_TLS_CERT_ENABLE     1
-#define SPLC_MBM_ENABLE               0
-#define SPLC_MBW_ENABLE               0
+#define SPLC_MBM_ENABLE               1
+#define SPLC_MBW_ENABLE               1
 #define SPLC_REAL_ENABLE              1
 #define SPLC_WIFI_ENABLE              1
 
