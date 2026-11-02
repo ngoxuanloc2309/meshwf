@@ -111,11 +111,8 @@ extern "C" {
 /* Capability bit MODBUS_SLAVE of 0x0A08 (App header SPLC_CAP_MODBUS_SLAVE, bit 14; 0x1000 is
  * HTTP_CLIENT). Declared statically by a build that has the Slave serving module
  * (SPLC_MODBUS_SLAVE_ENABLE = 1); the App refuses to Deploy a Slave port without it.
- * The module does NOT exist yet, so the option stays 0 and the bit is never declared. */
+ * The module is plc_mbs.h; the option itself lives in config/splc_opt.h. */
 #define PLC_MBM_CAP_MODBUS_SLAVE   0x00004000UL
-#ifndef SPLC_MODBUS_SLAVE_ENABLE
-#define SPLC_MODBUS_SLAVE_ENABLE   0
-#endif
 
 typedef enum {
     PLC_MBM_WRITE_OK = 0,
@@ -163,9 +160,10 @@ void plc_mbm_init(void);
 uint16_t plc_mbm_port_count(void);
 
 /* Role of an RS-485 port (SPLC-SPEC-SLAVE-001), set by the App in the port table
- * (bit 9 of +0 and +14 = Slave, +15 = Slave ID). A Slave port is never used as a Master:
+ * (+14 = 1 is Slave, +15 = Slave ID; bit 9 of +0 is deprecated and ignored). A Slave port is never used as a Master:
  * MB_READ / MB_WRITE blocks on it do not send (err_code 1), and COMMIT refuses an enabled
- * block that names it. Switching the role is done by a COMMIT of the port table. */
+ * block that names it with CONFIG_ERROR_CODE = 7 (SPLC_ERROR_SLAVE_PORT_CONFLICT; the App
+ * compiler already blocks this, so it is a second line of defence). Switching the role is done by a COMMIT of the port table. */
 typedef enum { PLC_MBM_ROLE_MASTER = 0, PLC_MBM_ROLE_SLAVE = 1 } plc_mbm_role_t;
 
 /* Role of port `idx` as running now (MASTER for a disabled port or an index out of range)
@@ -173,11 +171,15 @@ typedef enum { PLC_MBM_ROLE_MASTER = 0, PLC_MBM_ROLE_SLAVE = 1 } plc_mbm_role_t;
 plc_mbm_role_t plc_mbm_port_role(unsigned idx);
 uint8_t        plc_mbm_port_slave_id(unsigned idx);
 
-/* Turnaround Response Delay of an enabled Slave port in ms: register +6 of its record, the
- * wait before the Slave answers (0 = answer as soon as the 3.5-character silence allows).
- * The serving module must wait with a timer, never by blocking the scan. 0 for a Master or
- * disabled port. */
-uint16_t plc_mbm_port_response_delay_ms(unsigned idx);
+/* What the Slave serving module (plc_mbs) needs of a port. The Slave has no configurable
+ * turnaround: register +6 is "don't care" for a Slave port (App contract 29/10), it answers as
+ * soon as the request is complete.
+ *   plc_mbm_port_serial_port(): the host's byte port (NULL when none was registered).
+ *   plc_mbm_port_line(): the line settings now in the running port table (false: out of range).
+ *   plc_mbm_port_ready(): registered and its UART already runs the table's line settings. */
+const modbus_serial_port_t *plc_mbm_port_serial_port(unsigned idx);
+bool plc_mbm_port_line(unsigned idx, plc_mbm_serial_t *out);
+bool plc_mbm_port_ready(unsigned idx);
 
 /* true when port `idx` will be an ENABLED Slave once the pending COMMIT is applied (the draft
  * port table if one was written, else the running one). plc_mbw uses it to refuse an
@@ -206,6 +208,12 @@ void plc_mbm_ports_read(uint16_t offset, uint16_t quantity, uint16_t *registers_
 plc_mbm_write_result_t plc_mbm_ports_write(uint16_t offset, uint16_t quantity, const uint16_t *registers);
 
 bool plc_mbm_validate_draft(void);   /* true also when nothing was written */
+
+/* After plc_mbm_validate_draft() returned false: true when the rejection was an enabled
+ * MB_READ block naming a port that is an enabled Slave once this COMMIT is applied
+ * (plc_modbus_cfg then reports SPLC_ERROR_SLAVE_PORT_CONFLICT = 7 in CONFIG_ERROR_CODE),
+ * false for any other reason (error 2). Meaningless after a validate that returned true. */
+bool plc_mbm_draft_slave_conflict(void);
 void plc_mbm_commit_draft(void);     /* call only after validate returned true */
 void plc_mbm_discard_draft(void);
 

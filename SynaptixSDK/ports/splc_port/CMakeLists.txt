@@ -12,6 +12,7 @@
 add_library(meshwf_splc_port OBJECT
     splc_port.c
     splc_wifi_port.c
+    splc_rtc_port.c
 )
 
 target_include_directories(meshwf_splc_port PUBLIC
@@ -22,5 +23,6 @@ target_link_libraries(meshwf_splc_port PRIVATE
     splc
     st67w611_port
     sx_mqtt
+    sx_rtc
     stm32cubemx
 )
