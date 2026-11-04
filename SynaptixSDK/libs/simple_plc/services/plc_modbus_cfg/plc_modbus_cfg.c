@@ -22,6 +22,10 @@
 #include "sx_time.h"
 #include "splc_log.h"
 
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_MB
+#include "mb_port.h"   /* adapter for libs/mb_master_slave (port/mb_port/) */
+#endif
+
 static const char *TAG = "PLC_MODBUS_CFG";
 
 /*
@@ -47,7 +51,9 @@ SPLC_DeviceHealth       g_device_health;
  * itself is copied.
  */
 
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
 static nmbs_t              s_nmbs;
+#endif
 static modbus_transport_t  s_transport;
 static uint32_t            s_boot_tick_ms;
 
@@ -83,7 +89,9 @@ static bool                s_initialized = false;
 /* Extra transports (slot 0 above stays the board's own). Same lifetime rules as
  * s_transport: the struct is copied, ctx is the caller's. */
 #define EXTRA_TRANSPORTS  (SPLC_MODBUS_MAX_TRANSPORTS - 1)
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
 static nmbs_t              s_x_nmbs[EXTRA_TRANSPORTS];
+#endif
 static modbus_transport_t  s_x_transport[EXTRA_TRANSPORTS];
 static uint8_t             s_x_count = 0U;       /* slots in use, all created OK */
 static bool                s_x_tcp   = false;    /* a TCP transport is registered */
@@ -1736,6 +1744,89 @@ static nmbs_error cb_write_single_register(uint16_t address, uint16_t value, uin
     return cb_write_multiple_registers(address, 1U, &value, unit_id, arg);
 }
 
+/*
+ * Framing + address check shared by init and add_transport. The byte link
+ * does not know the Modbus framing (modbus_link.h): the board assigns
+ * modbus_transport_t.kind. A board that forgot to is caught here, loudly,
+ * instead of running a device whose App link silently times out.
+ */
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_MB
+/*
+ * Holding-register bridge for the MB library (port/mb_port): the library hands
+ * big-endian register BYTES and one callback for FC03/FC06/FC16; the register
+ * map above works on host-order uint16_t and nanoMODBUS-style callbacks, so this
+ * converts and reuses them unchanged. FC06 is indistinguishable from FC16 of one
+ * register here: one register goes through cb_write_single_register(), which
+ * keeps the FC06 rules (0x0900..0x09FF rejected, 0x0A00 / diag / 0xA000 commands)
+ * and otherwise falls through to cb_write_multiple_registers().
+ */
+#define MB_BRIDGE_MAX_REGS  125U
+
+static uint8_t mb_exception_from(nmbs_error err)
+{
+    if (err == NMBS_ERROR_NONE) {
+        return 0U;
+    }
+    if (err >= NMBS_EXCEPTION_ILLEGAL_FUNCTION && err <= NMBS_EXCEPTION_SERVER_DEVICE_FAILURE) {
+        return (uint8_t)err;               /* Modbus exception codes 1..4 */
+    }
+    return (uint8_t)NMBS_EXCEPTION_SERVER_DEVICE_FAILURE;
+}
+
+static uint8_t mb_holding_cb(uint8_t *buf, uint16_t addr, uint16_t nregs, bool write)
+{
+    uint16_t regs[MB_BRIDGE_MAX_REGS];
+    if (nregs == 0U || nregs > MB_BRIDGE_MAX_REGS) {
+        return (uint8_t)NMBS_EXCEPTION_ILLEGAL_DATA_VALUE;
+    }
+    if (!write) {
+        const nmbs_error err = cb_read_holding_registers(addr, nregs, regs, 0U, NULL);
+        if (err == NMBS_ERROR_NONE) {
+            for (uint16_t i = 0U; i < nregs; i++) {
+                buf[2U * i]      = (uint8_t)(regs[i] >> 8);
+                buf[2U * i + 1U] = (uint8_t)(regs[i] & 0xFFU);
+            }
+        }
+        return mb_exception_from(err);
+    }
+    for (uint16_t i = 0U; i < nregs; i++) {
+        regs[i] = (uint16_t)(((uint16_t)buf[2U * i] << 8) | buf[2U * i + 1U]);
+    }
+    const nmbs_error err = (nregs == 1U)
+        ? cb_write_single_register(addr, regs[0], 0U, NULL)
+        : cb_write_multiple_registers(addr, nregs, regs, 0U, NULL);
+    return mb_exception_from(err);
+}
+#endif /* SPLC_MODBUS_LIB_MB */
+
+static bool transport_config_ok(const modbus_transport_t *t, const char *who)
+{
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_MB
+    /* The MB library also frames ASCII. */
+    const bool kind_ok = (t->kind == MODBUS_TRANSPORT_KIND_RTU)   ||
+                         (t->kind == MODBUS_TRANSPORT_KIND_TCP)   ||
+                         (t->kind == MODBUS_TRANSPORT_KIND_ASCII);
+    const bool serial  = (t->kind == MODBUS_TRANSPORT_KIND_RTU) ||
+                         (t->kind == MODBUS_TRANSPORT_KIND_ASCII);
+#else
+    /* nanoMODBUS: RTU + TCP only. ASCII (needs SPLC_MODBUS_LIB_MB) lands in the
+     * "bad kind" branch below, like any other unsupported value. */
+    const bool kind_ok = (t->kind == MODBUS_TRANSPORT_KIND_RTU) ||
+                         (t->kind == MODBUS_TRANSPORT_KIND_TCP);
+    const bool serial  = (t->kind == MODBUS_TRANSPORT_KIND_RTU);
+#endif
+    if (!kind_ok) {
+        log_error(TAG, "%s: bad or unset transport kind %d -- the board must set "
+                       "modbus_transport_t.kind (RTU or TCP)", who, (int)t->kind);
+        return false;
+    }
+    if (serial && (t->unit_id < 1U || t->unit_id > 247U)) {
+        log_error(TAG, "%s: RTU unit_id %u not in 1..247", who, (unsigned)t->unit_id);
+        return false;
+    }
+    return true;
+}
+
 /* --- Public API (see plc_modbus_cfg.h for full contracts) --------------- */
 
 void plc_modbus_cfg_init(const modbus_transport_t *transport)
@@ -1744,6 +1835,12 @@ void plc_modbus_cfg_init(const modbus_transport_t *transport)
     s_transport    = *transport;
     s_boot_tick_ms = sx_get_tick_ms();
 
+    if (!transport_config_ok(&s_transport, "init")) {
+        log_error(TAG, "Modbus config service DISABLED");
+        return;
+    }
+
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
     nmbs_platform_conf platform_conf;
     nmbs_platform_conf_create(&platform_conf);
     platform_conf.transport = (nmbs_transport)s_transport.kind;
@@ -1828,6 +1925,14 @@ void plc_modbus_cfg_init(const modbus_transport_t *transport)
     nmbs_set_read_timeout(&s_nmbs, 0);
     nmbs_set_byte_timeout(&s_nmbs, MODBUS_BYTE_TIMEOUT_MS);
 
+#else
+    /* MB library: the adapter creates the server on this transport (slot 0) and
+     * logs the reason itself when it cannot (bad kind, UDP not written, ...). */
+    if (!mb_port_server_create(0U, &s_transport, mb_holding_cb)) {
+        log_error(TAG, "Modbus config service DISABLED");
+        return;
+    }
+#endif
     s_initialized = true;
     log_info(TAG, "init OK, transport kind=%d unit_id=%u",
              (int)s_transport.kind, (unsigned)s_transport.unit_id);
@@ -1840,6 +1945,9 @@ bool plc_modbus_cfg_add_transport(const modbus_transport_t *transport)
         log_error(TAG, "add_transport: NULL transport or read/write");
         return false;
     }
+    if (!transport_config_ok(transport, "add_transport")) {
+        return false;
+    }
     if (s_x_count >= EXTRA_TRANSPORTS) {
         log_error(TAG, "add_transport: all %u extra slots used", (unsigned)EXTRA_TRANSPORTS);
         return false;
@@ -1848,6 +1956,7 @@ bool plc_modbus_cfg_add_transport(const modbus_transport_t *transport)
     const uint8_t i = s_x_count;
     s_x_transport[i] = *transport;
 
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
     nmbs_platform_conf platform_conf;
     nmbs_platform_conf_create(&platform_conf);
     platform_conf.transport = (nmbs_transport)s_x_transport[i].kind;
@@ -1875,6 +1984,11 @@ bool plc_modbus_cfg_add_transport(const modbus_transport_t *transport)
     nmbs_set_read_timeout(&s_x_nmbs[i], 0);
     nmbs_set_byte_timeout(&s_x_nmbs[i], MODBUS_BYTE_TIMEOUT_MS);
 
+#else
+    if (!mb_port_server_create((uint8_t)(i + 1U), &s_x_transport[i], mb_holding_cb)) {
+        return false;
+    }
+#endif
     if (s_x_transport[i].kind == MODBUS_TRANSPORT_KIND_TCP) {
         s_x_tcp = true;
     }
@@ -1895,7 +2009,11 @@ void modbus_config_service(void)
     }
 
     if (s_initialized) {
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
         nmbs_server_poll(&s_nmbs);   /* else s_nmbs is all-zero; polling it would jump to NULL. */
+#else
+        mb_port_server_poll(0U);     /* rx bytes -> timers -> eMBSPoll -> reply (mb_port.h) */
+#endif
     }
 
 #if SPLC_MODBUS_MAX_TRANSPORTS > 1
@@ -1907,7 +2025,11 @@ void modbus_config_service(void)
         if (s_x_transport[i].process != NULL) {
             s_x_transport[i].process(s_x_transport[i].ctx);
         }
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_NANO
         nmbs_server_poll(&s_x_nmbs[i]);
+#else
+        mb_port_server_poll((uint8_t)(i + 1U));
+#endif
     }
 #endif
 }

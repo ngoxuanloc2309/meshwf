@@ -143,3 +143,72 @@ if(SPLC_PORT_USB_CDC)
 else()
     message(STATUS "libs/CMakeLists.txt: SPLC_PORT_USB_CDC=0 -- TinyUSB not built (host firmware owns USB).")
 endif()
+
+# --- mb_master_slave, SLAVE side only (optional: SPLC_MODBUS_LIB = MB) -----
+#
+# Built only when splcopts.h selects SPLC_MODBUS_LIB_MB (cmake_modules/
+# splc_select.cmake sets SPLC_MODBUS_LIB_IS_MB). The library ships no mbport.h /
+# mbsconfig.h: the product supplies them -- here port/mb_port/include/. Its
+# porting layer (eMBP*) is port/mb_port/mb_port.c, part of splc_port, so this
+# target has unresolved eMBP* symbols until splc_port is linked (static libs).
+# The master side (mbmaster/, serial RTU) is target splc_mbmaster below. NOTE: global symbols are the
+# library's own (eMBS*, eMBP*, ...); a host firmware that embeds another copy of
+# the same library would clash (decision 21) -- not checked.
+# LICENSE: sources carry "use subject to license terms" (Embedded Experts GmbH):
+# confirm before shipping a product with SPLC_MODBUS_LIB_MB.
+if(SPLC_MODBUS_LIB_IS_MB)
+    set(_MBS ${CMAKE_CURRENT_SOURCE_DIR}/mb_master_slave/mbslave)
+    add_library(splc_mbslave STATIC
+        ${_MBS}/mbs.c
+        ${_MBS}/common/mbutils.c
+        ${_MBS}/rtu/mbsrtu.c
+        ${_MBS}/rtu/mbscrc.c
+        ${_MBS}/ascii/mbsascii.c
+        ${_MBS}/tcp/mbstcp.c
+        ${_MBS}/udp/mbsudp.c
+        ${_MBS}/functions/mbsfuncholding.c
+        ${_MBS}/functions/mbsfuncinput.c
+        ${_MBS}/functions/mbsfunccoils.c
+        ${_MBS}/functions/mbsfuncdisc.c
+        ${_MBS}/functions/mbsfuncfilerecord.c
+        ${_MBS}/functions/mbsfuncdiag.c
+        ${_MBS}/functions/mbsslaveid.c
+    )
+    # mbstcp.c keeps the unit id in a local that MBS_TCP_IGNORE_UNIT_ID=1 (mbsconfig.h)
+    # never reads: a third-party file, so silence it here instead of editing it.
+    set_source_files_properties(${_MBS}/tcp/mbstcp.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-unused-but-set-variable")
+    target_include_directories(splc_mbslave PUBLIC
+        ${_MBS}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../port/mb_port/include   # mbport.h, mbsconfig.h
+    )
+    target_include_directories(splc_mbslave PRIVATE ${_MBS})   # "rtu/..", "functions/.." ...
+    target_link_libraries(splc_mbslave PUBLIC splc_config)     # splc_opt.h (mbsconfig.h)
+    target_compile_features(splc_mbslave PUBLIC c_std_11)
+    message(STATUS "libs/CMakeLists.txt: SPLC_MODBUS_LIB=MB -- 'splc_mbslave' target built (RTU+ASCII+TCP slave, holding registers).")
+
+    # --- MASTER side (mbmaster/): serial RTU only; the Modbus master blocks and the Gateway's
+    # Remote I/O (port/modbus_serial/modbus_serial_mb.c drives it through the polled API).
+    # mbmaster/common/mbutils.c is NOT built: it is the same code as mbslave/common/mbutils.c
+    # (only the header comment differs), so the master links against splc_mbslave for it.
+    set(_MBM ${CMAKE_CURRENT_SOURCE_DIR}/mb_master_slave/mbmaster)
+    add_library(splc_mbmaster STATIC
+        ${_MBM}/mbm.c
+        ${_MBM}/rtu/mbmrtu.c
+        ${_MBM}/rtu/mbmcrc.c
+        ${_MBM}/ascii/mbmascii.c   # empty unless a port is built for ASCII (MBM_ASCII_ENABLED)
+        ${_MBM}/tcp/mbmtcp.c   # empty unless SPLC_MODBUS_TCP_MASTER_ENABLE=1 (MBM_TCP_ENABLED)
+        ${_MBM}/functions/mbmfuncholding.c
+        ${_MBM}/functions/mbmfuncinput.c
+        ${_MBM}/functions/mbmfunccoils.c
+        ${_MBM}/functions/mbmfuncdisc.c
+    )
+    target_include_directories(splc_mbmaster PUBLIC
+        ${_MBM}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../port/mb_port/include   # mbport.h, mbmconfig.h
+    )
+    target_include_directories(splc_mbmaster PRIVATE ${_MBM})
+    target_link_libraries(splc_mbmaster PUBLIC splc_config splc_mbslave)
+    target_compile_features(splc_mbmaster PUBLIC c_std_11)
+    message(STATUS "libs/CMakeLists.txt: SPLC_MODBUS_LIB=MB -- 'splc_mbmaster' target built (RTU master, FC01..06/15/16).")
+endif()

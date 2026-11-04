@@ -55,10 +55,14 @@
 /* #define SPLC_MBW_ENABLE               0 */      /* 1 = MB_WRITE blocks 0x1100..0x11FF (needs SPLC_MBM_ENABLE 1); 0 = no change at all */
 /* #define SPLC_MODBUS_SLAVE_ENABLE      0 */      /* 1 = serve the fixed Modbus Slave map (plc_mbs.h) on RS-485 ports the App set to Slave, and declare capability 0x4000 (needs SPLC_MBM_ENABLE 1); 0 = no change at all */
 /* #define SPLC_MBM_PORT_COUNT           1 */      /* 1..4 RS-485 ports for MB_READ/MB_WRITE (reported at 0x0A0A); the host registers one UART per port with splc_mbm_set_rs485_port(); line settings come from the App (0x1400) */
+/* #define SPLC_MODBUS_TCP_MASTER_ENABLE 0 */      /* 1 = Modbus TCP master API modbus_tcp_master_* (host registers the sockets; needs SPLC_MODBUS_LIB_MB); 0 = no change at all. Also SPLC_MODBUS_TCP_MASTER_COUNT 1..4, _CONNECT_MS, _RETRY_MS, _HOST_MAX */
 
 /* --- MQTT Subscribe ----------------------------------------------------- */
 /* #define SPLC_MQTT_SUB_ENABLE          0 */      /* 1 = remote commands/setpoints from MQTT into tags (needs SPLC_MQTT_ENABLE 1); 0 = no change at all */
 /* #define SPLC_MQTT_SUB_FIFO_DEPTH      1 */      /* 1..8 queued messages per block for FIFO delivery; 1 = latest only */
+
+/* --- Zigbee port configuration (SPLC-SPEC-ZIGBEE-006) -------------------- */
+/* #define SPLC_ZIGBEE_ENABLE            0 */      /* 1 = Zigbee configuration block 0x1700..0x173F (role, slave id, PAN id, channel, antenna, network key) saved with the Rule Table; the host registers its Zigbee port; 0 = no change at all */
 
 /* --- REAL (float32) tags ---------------------------------------------- */
 /* #define SPLC_REAL_ENABLE              0 */      /* 1 = Tag DataType Registry 0x0080 (BOOL/INT32/REAL per tag) + float32 Rule Engine (rule flags bit 0); 0 = no change at all */

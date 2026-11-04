@@ -49,6 +49,10 @@
 #define SPLC_BOARD_GATEWAY               4
 #define SPLC_BOARD_WIFI_IO               5
 
+/* Modbus protocol library behind the App link (plc_modbus_cfg). */
+#define SPLC_MODBUS_LIB_NANO             1   /* nanoMODBUS (libs/nanomodbus): RTU + TCP */
+#define SPLC_MODBUS_LIB_MB               2   /* mb_master_slave (libs/mb_master_slave): RTU + ASCII + TCP (UDP not written) */
+
 /* ======================================================================
  * Target
  * ==================================================================== */
@@ -165,6 +169,59 @@
 #define SPLC_PORT_USB_CDC                0
 #endif
 
+/* Which Modbus library serves the App link. Both sit behind the same public
+ * API (plc_modbus_cfg_init / plc_modbus_cfg_add_transport / modbus_config_service)
+ * and the same register-map logic; only the thin adapter at the bottom of
+ * plc_modbus_cfg.c differs. Default NANO = behaviour (and binary) unchanged.
+ * MB is not wired up yet: building with it stops at a clear #error until its
+ * adapter (mb_port) lands. ASCII framing (MODBUS_TRANSPORT_KIND_ASCII) needs MB. */
+#ifndef SPLC_MODBUS_LIB
+#define SPLC_MODBUS_LIB                  SPLC_MODBUS_LIB_NANO
+#endif
+
+/* SPLC_MODBUS_LIB_MB, RTU only: floor (ms) for the end-of-frame (T3.5) timer.
+ * The timer is max(library T3.5, this). 0 = exactly the library's T3.5
+ * (2 ms above 19200 baud, else 38500/baud ms). A master whose bytes arrive in
+ * bursts (e.g. a USB-RS485 dongle) can need ~15 ms; the cost is the same
+ * amount of extra reply latency. Ignored by SPLC_MODBUS_LIB_NANO. */
+#ifndef SPLC_MODBUS_RTU_GAP_MS
+#define SPLC_MODBUS_RTU_GAP_MS           0
+#endif
+
+/* SPLC_MODBUS_LIB_MB, TCP: a request that stops half-way (the host replaced or
+ * dropped the connection; the byte pipe tells the adapter nothing) would glue
+ * the NEXT connection's bytes onto it. After this many ms without a byte, while
+ * the library holds a partial frame, the adapter drops that frame (it re-opens
+ * its single virtual client). Ignored by SPLC_MODBUS_LIB_NANO. */
+#ifndef SPLC_MODBUS_TCP_PARTIAL_MS
+#define SPLC_MODBUS_TCP_PARTIAL_MS       1000
+#endif
+
+/* SPLC_MODBUS_LIB_MB only: Modbus TCP MASTER (port/modbus_tcp_master/, API modbus_tcp_master_*).
+ * The HOST owns the sockets (lwIP style): it registers connect/read/write/close callbacks
+ * per master; SimplePLC owns the MBAP framing, transaction ids and timeouts. 0 = nothing is
+ * built or linked and the binary does not change. Not wired to MB_READ/MB_WRITE yet (the
+ * wire has no IP/port field): the host or a board file calls the API itself.
+ *   COUNT      : 1..4 TCP masters (one connection / one request in flight each),
+ *   CONNECT_MS : how long one request may wait for the host to finish connecting,
+ *   RETRY_MS   : pause after a failed connect before the next attempt,
+ *   HOST_MAX   : room for the target host string kept inside each master (with NUL). */
+#ifndef SPLC_MODBUS_TCP_MASTER_ENABLE
+#define SPLC_MODBUS_TCP_MASTER_ENABLE    0
+#endif
+#ifndef SPLC_MODBUS_TCP_MASTER_COUNT
+#define SPLC_MODBUS_TCP_MASTER_COUNT     1
+#endif
+#ifndef SPLC_MODBUS_TCP_MASTER_CONNECT_MS
+#define SPLC_MODBUS_TCP_MASTER_CONNECT_MS 3000
+#endif
+#ifndef SPLC_MODBUS_TCP_MASTER_RETRY_MS
+#define SPLC_MODBUS_TCP_MASTER_RETRY_MS  1000
+#endif
+#ifndef SPLC_MODBUS_TCP_MASTER_HOST_MAX
+#define SPLC_MODBUS_TCP_MASTER_HOST_MAX  40
+#endif
+
 /* Modbus slave address the device answers to (1..247). */
 #ifndef SPLC_MODBUS_UNIT_ID
 #define SPLC_MODBUS_UNIT_ID              1
@@ -251,6 +308,21 @@
 #endif
 
 /* ======================================================================
+ * Zigbee port configuration (SPLC-SPEC-ZIGBEE-006 v0.2, handoff decision 98)
+ * ======================================================================
+ * 1 = the Zigbee configuration block 0x1700..0x173F: the App writes role, slave
+ * id, PAN id, channel, antenna and the network key through the draft + COMMIT
+ * path; the configuration is saved in the Flash Rule Table record (flag bit 8,
+ * SPLC_RULE_FLASH_ZIGBEE_FLAG, the LAST section). The library holds the LOGIC and
+ * the data only: the host registers its Zigbee port, applies the configuration to
+ * the radio module and reports the link state (like Wi-Fi / TLS). The capability
+ * bit 0x8000 is declared only after the host has registered a port.
+ * 0 = nothing changes: no code, no Flash flag, the exact baseline binary. */
+#ifndef SPLC_ZIGBEE_ENABLE
+#define SPLC_ZIGBEE_ENABLE               0
+#endif
+
+/* ======================================================================
  * Modbus master blocks: MB_READ (0x1000..0x10FF), later MB_WRITE (0x1100..)
  * ==================================================================== */
 /* 1 = build the Modbus-master service and enlarge the RS485 master buffers to
@@ -270,6 +342,39 @@
  * App over the wire (0x1400..0x143F, SPLC-SPEC-MBM-003). */
 #ifndef SPLC_MBM_PORT_COUNT
 #define SPLC_MBM_PORT_COUNT              1
+#endif
+
+/* Frame format of each RS-485 port, for BOTH roles it can take (Modbus Master: MB_READ /
+ * MB_WRITE; Modbus Slave: plc_mbs). Fixed at build time, like the .kind a board gives the
+ * App link: the wire (0x1400) has no field for it. SPLC_MODBUS_FRAMING_RTU (default) or
+ * SPLC_MODBUS_FRAMING_ASCII (":" ... LRC CR LF, hex characters, no T3.5 gap). ASCII needs
+ * SPLC_MODBUS_LIB_MB; with NANO any ASCII port is a build error. The device on the other
+ * end must use the same format and line settings (ASCII is usually 7E1 / 7O1 / 7N2 / 8N1,
+ * set by the App in the port table). Ports above SPLC_MBM_PORT_COUNT are ignored. */
+#define SPLC_MODBUS_FRAMING_RTU          0
+#define SPLC_MODBUS_FRAMING_ASCII        1
+
+/* How a byte pipe lets the library find the end of an RTU frame (SPLC_MODBUS_LIB_MB only; ASCII
+ * has its own delimiters and ignores this). A pipe declares it when it is registered:
+ *   SPLC_MODBUS_SYNC_TIMING (0, default): a real UART line -- the 3.5-character silence ends a
+ *       frame, exactly as before.
+ *   SPLC_MODBUS_SYNC_LENGTH (1): a pipe that does not keep the byte timing (a radio module in
+ *       transparent mode, a socket): the end of a request is found from its length (FC01..06 =
+ *       8 bytes, FC15/16 = 9 + byte count), the T3.5 timer is only the fallback for anything
+ *       else, and a second request that arrives in the same read waits for its turn. */
+#define SPLC_MODBUS_SYNC_TIMING          0
+#define SPLC_MODBUS_SYNC_LENGTH          1
+#ifndef SPLC_MBM_PORT1_FRAMING
+#define SPLC_MBM_PORT1_FRAMING           SPLC_MODBUS_FRAMING_RTU
+#endif
+#ifndef SPLC_MBM_PORT2_FRAMING
+#define SPLC_MBM_PORT2_FRAMING           SPLC_MODBUS_FRAMING_RTU
+#endif
+#ifndef SPLC_MBM_PORT3_FRAMING
+#define SPLC_MBM_PORT3_FRAMING           SPLC_MODBUS_FRAMING_RTU
+#endif
+#ifndef SPLC_MBM_PORT4_FRAMING
+#define SPLC_MBM_PORT4_FRAMING           SPLC_MODBUS_FRAMING_RTU
 #endif
 
 /* 1 = build MB_WRITE (0x1100..0x11FF, plc_mbw.h): the device writes tags to Modbus
@@ -460,6 +565,53 @@
 #if SPLC_MBM_ENABLE && ((SPLC_MBM_PORT_COUNT < 1) || (SPLC_MBM_PORT_COUNT > 4))
 #error "SPLC_MBM_PORT_COUNT must be 1..4 (the wire and the Flash image carry 4 port records)"
 #endif
+#if ((SPLC_MBM_PORT1_FRAMING != 0) && (SPLC_MBM_PORT1_FRAMING != 1)) || \
+    ((SPLC_MBM_PORT2_FRAMING != 0) && (SPLC_MBM_PORT2_FRAMING != 1)) || \
+    ((SPLC_MBM_PORT3_FRAMING != 0) && (SPLC_MBM_PORT3_FRAMING != 1)) || \
+    ((SPLC_MBM_PORT4_FRAMING != 0) && (SPLC_MBM_PORT4_FRAMING != 1))
+#error "SPLC_MBM_PORTn_FRAMING must be SPLC_MODBUS_FRAMING_RTU or SPLC_MODBUS_FRAMING_ASCII"
+#endif
+/* Number of RS-485 ports (1..SPLC_MBM_PORT_COUNT) built for ASCII; sizes the library's ASCII
+ * instance tables. 0 = no ASCII master/slave code is built. */
+#if SPLC_MBM_ENABLE
+#define SPLC_MBM_ASCII_PORTS \
+    ( ((SPLC_MBM_PORT_COUNT >= 1) && (SPLC_MBM_PORT1_FRAMING == SPLC_MODBUS_FRAMING_ASCII)) + \
+      ((SPLC_MBM_PORT_COUNT >= 2) && (SPLC_MBM_PORT2_FRAMING == SPLC_MODBUS_FRAMING_ASCII)) + \
+      ((SPLC_MBM_PORT_COUNT >= 3) && (SPLC_MBM_PORT3_FRAMING == SPLC_MODBUS_FRAMING_ASCII)) + \
+      ((SPLC_MBM_PORT_COUNT >= 4) && (SPLC_MBM_PORT4_FRAMING == SPLC_MODBUS_FRAMING_ASCII)) )
+#else
+#define SPLC_MBM_ASCII_PORTS             0
+#endif
+#if (SPLC_MODBUS_LIB != SPLC_MODBUS_LIB_NANO) && (SPLC_MODBUS_LIB != SPLC_MODBUS_LIB_MB)
+#error "SPLC_MODBUS_LIB must be SPLC_MODBUS_LIB_NANO or SPLC_MODBUS_LIB_MB"
+#endif
+#if (SPLC_MBM_ASCII_PORTS > 0) && (SPLC_MODBUS_LIB != SPLC_MODBUS_LIB_MB)
+#error "an RS-485 port built for ASCII (SPLC_MBM_PORTn_FRAMING) needs SPLC_MODBUS_LIB_MB"
+#endif
+#if (SPLC_MODBUS_RTU_GAP_MS < 0) || (SPLC_MODBUS_RTU_GAP_MS > 1000)
+#error "SPLC_MODBUS_RTU_GAP_MS must be 0..1000"
+#endif
+#if (SPLC_MODBUS_TCP_PARTIAL_MS < 50) || (SPLC_MODBUS_TCP_PARTIAL_MS > 60000)
+#error "SPLC_MODBUS_TCP_PARTIAL_MS must be 50..60000"
+#endif
+#if (SPLC_MODBUS_TCP_MASTER_ENABLE != 0) && (SPLC_MODBUS_TCP_MASTER_ENABLE != 1)
+#error "SPLC_MODBUS_TCP_MASTER_ENABLE must be 0 or 1"
+#endif
+#if SPLC_MODBUS_TCP_MASTER_ENABLE && (SPLC_MODBUS_LIB != SPLC_MODBUS_LIB_MB)
+#error "SPLC_MODBUS_TCP_MASTER_ENABLE needs SPLC_MODBUS_LIB = SPLC_MODBUS_LIB_MB (nanoMODBUS has no non-blocking TCP client)"
+#endif
+#if (SPLC_MODBUS_TCP_MASTER_COUNT < 1) || (SPLC_MODBUS_TCP_MASTER_COUNT > 4)
+#error "SPLC_MODBUS_TCP_MASTER_COUNT must be 1..4"
+#endif
+#if (SPLC_MODBUS_TCP_MASTER_CONNECT_MS < 100) || (SPLC_MODBUS_TCP_MASTER_CONNECT_MS > 60000)
+#error "SPLC_MODBUS_TCP_MASTER_CONNECT_MS must be 100..60000"
+#endif
+#if (SPLC_MODBUS_TCP_MASTER_RETRY_MS < 0) || (SPLC_MODBUS_TCP_MASTER_RETRY_MS > 60000)
+#error "SPLC_MODBUS_TCP_MASTER_RETRY_MS must be 0..60000"
+#endif
+#if (SPLC_MODBUS_TCP_MASTER_HOST_MAX < 16) || (SPLC_MODBUS_TCP_MASTER_HOST_MAX > 128)
+#error "SPLC_MODBUS_TCP_MASTER_HOST_MAX must be 16..128"
+#endif
 #if (SPLC_MODBUS_MAX_TRANSPORTS < 1) || (SPLC_MODBUS_MAX_TRANSPORTS > 3)
 #error "SPLC_MODBUS_MAX_TRANSPORTS must be 1..3"
 #endif
@@ -495,6 +647,9 @@
 #endif
 #if SPLC_MQTT_SUB_ENABLE && ((SPLC_MQTT_SUB_FIFO_DEPTH < 1) || (SPLC_MQTT_SUB_FIFO_DEPTH > 8))
 #error "SPLC_MQTT_SUB_FIFO_DEPTH must be 1..8"
+#endif
+#if (SPLC_ZIGBEE_ENABLE != 0) && (SPLC_ZIGBEE_ENABLE != 1)
+#error "SPLC_ZIGBEE_ENABLE must be 0 or 1"
 #endif
 #if (SPLC_MQTT_PAYLOAD_MAX < 128) || (SPLC_MQTT_PAYLOAD_MAX > 512)
 #error "SPLC_MQTT_PAYLOAD_MAX must be 128..512 (compact JSON worst case is 127 characters + NUL)"
