@@ -90,7 +90,7 @@ static st67_mqtt_status_t copy_str(uint8_t *dst, size_t dst_size, const char *sr
  * is HELD (acquire) and the content pointers point into Flash: the caller must call
  * tls_detach() as soon as W6X_MQTT_Configure() returned (the vendor copies the PEM into the
  * module there), so the engine task can erase the sector again. */
-static st67_mqtt_status_t tls_attach(W6X_MQTT_Connect_t *v, const char *host)
+static st67_mqtt_status_t tls_attach(W6X_MQTT_Connect_t *v, const char *host, bool use_mtls)
 {
     if (!st67_cert_store_acquire()) {
         log_warn(TAG, "TLS: certificate store busy (being rewritten), try again later");
@@ -105,10 +105,11 @@ static st67_mqtt_status_t tls_attach(W6X_MQTT_Connect_t *v, const char *host)
         log_warn(TAG, "TLS: no Root CA stored, refusing to connect (the server cannot be verified)");
         return ST67_MQTT_ERR_CERT;
     }
-    if ((cert == NULL) != (key == NULL)) {
+    if (use_mtls && (cert == NULL || key == NULL)) {
         st67_cert_store_release();
-        log_warn(TAG, "TLS: client %s stored without the client %s, refusing to connect",
-                 (cert != NULL) ? "certificate" : "key", (cert != NULL) ? "key" : "certificate");
+        log_warn(TAG, "mTLS requested but the client %s is not stored, refusing to connect",
+                 (cert == NULL && key == NULL) ? "certificate and key" :
+                 (cert == NULL) ? "certificate" : "key");
         return ST67_MQTT_ERR_CERT;
     }
     if (copy_str(v->SNI, sizeof(v->SNI), host) != ST67_MQTT_OK ||
@@ -118,7 +119,7 @@ static st67_mqtt_status_t tls_attach(W6X_MQTT_Connect_t *v, const char *host)
     }
     v->CACertificateContent = (char *)(uintptr_t)ca;     /* the vendor only reads it */
     v->Scheme               = 2U;
-    if (cert != NULL) {
+    if (use_mtls) {                                      /* cert/key are both here: checked above */
         if (copy_str(v->CertificateName, sizeof(v->CertificateName), TLS_FILE_CERT) != ST67_MQTT_OK ||
             copy_str(v->PrivateKeyName, sizeof(v->PrivateKeyName), TLS_FILE_KEY) != ST67_MQTT_OK) {
             st67_cert_store_release();
@@ -178,7 +179,7 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     s_connected = false;
 #if SPLC_MQTT_TLS_CERT_ENABLE
     if (cfg->use_tls) {
-        const st67_mqtt_status_t t = tls_attach(&s_vendor_cfg, cfg->host);
+        const st67_mqtt_status_t t = tls_attach(&s_vendor_cfg, cfg->host, cfg->use_mtls);
         if (t != ST67_MQTT_OK) {
             return t;
         }

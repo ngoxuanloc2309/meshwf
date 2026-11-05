@@ -139,6 +139,14 @@ static bool convert_app(const splc_mqtt_broker_t *b, st67_mqtt_config_t *c)
     /* An empty client id would let the module pick one; keep it stable instead. */
     strcpy(c->client_id, (b->client_id[0] != '\0') ? b->client_id : BROKER_DEFAULT_DEVICEID);
     c->use_tls       = (b->use_tls != 0U);      /* certificates are read at connect time */
+    c->use_mtls      = c->use_tls && b->use_mtls;   /* mutual TLS: the client cert + key are then required */
+    if (c->use_tls && (b->ignore_hostname || b->allow_self_signed)) {
+        log_warn(TAG, "App asked to %s%s%s: the module cannot do that, the server is always verified "
+                      "(Root CA + SNI)",
+                 b->ignore_hostname ? "ignore the host name" : "",
+                 (b->ignore_hostname && b->allow_self_signed) ? " and to " : "",
+                 b->allow_self_signed ? "allow a self-signed certificate" : "");
+    }
     c->port          = (b->port != 0U) ? b->port
                                        : (c->use_tls ? 8883U : (uint16_t)BROKER_DEFAULT_PORT);
     c->keepalive_sec = b->keepalive_sec;
@@ -419,7 +427,7 @@ void sx_mqtt_pump(uint32_t now_ms)
         taskEXIT_CRITICAL();
 
         log_info(TAG, "target broker %s:%u (%s%s), generation %u", cfg.host, (unsigned)cfg.port,
-                 use_app ? "from App" : "default", cfg.use_tls ? ", TLS" : "", (unsigned)gen);
+                 use_app ? "from App" : "default", cfg.use_tls ? (cfg.use_mtls ? ", mTLS" : ", TLS") : "", (unsigned)gen);
     }
 
 #if SPLC_MQTT_SUB_ENABLE
@@ -594,7 +602,7 @@ static void try_connect(uint32_t now_ms)
     }
     s_try_seq = box.seq;
     log_info(TAG, "connecting to %s:%u (%s%s)", box.cfg.host, (unsigned)box.cfg.port,
-             box.from_app ? "App" : "default", box.cfg.use_tls ? ", TLS" : "");
+             box.from_app ? "App" : "default", box.cfg.use_tls ? (box.cfg.use_mtls ? ", mTLS" : ", TLS") : "");
 
     const st67_mqtt_status_t r = st67_mqtt_connect(&box.cfg, SX_MQTT_CONNECT_TIMEOUT_MS);
     if (r != ST67_MQTT_OK) {

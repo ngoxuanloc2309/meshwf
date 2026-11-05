@@ -53,13 +53,17 @@ typedef struct {
     char     password[ST67_MQTT_CRED_MAX + 1U];
     uint16_t keepalive_sec;                        /* 0 = module default (120 s) */
     bool     clean_session;
-    /* TLS (the certificates come from st67_cert_store, not from this struct):
-     *   Root CA stored, no client cert/key  -> vendor scheme 2 (server verified);
-     *   Root CA + client cert + client key  -> scheme 4 (mutual TLS);
-     * anything else (no Root CA, or only one of cert/key) -> ST67_MQTT_ERR_CERT, nothing is sent.
+    /* TLS (the certificates come from st67_cert_store, not from this struct). use_mtls (the App's
+     * mutual-TLS switch, only meaningful with use_tls) decides the scheme, NOT what the store holds:
+     *   use_mtls = false: Root CA stored          -> vendor scheme 2 (server verified); a client
+     *                     cert/key that is still in the store is NOT sent;
+     *   use_mtls = true:  Root CA + client cert + client key -> scheme 4 (mutual TLS);
+     * anything else (no Root CA; use_mtls without the client cert or without the client key)
+     * -> ST67_MQTT_ERR_CERT, nothing is sent (no silent fall-back to one-way TLS).
      * A Root CA is REQUIRED: scheme 3 (client cert without verifying the server) is never used.
      * The host name doubles as SNI. Username/password are still passed to the module. */
     bool     use_tls;
+    bool     use_mtls;
 } st67_mqtt_config_t;
 
 /* Hook the facade event and give the vendor its receive buffer. Call after
