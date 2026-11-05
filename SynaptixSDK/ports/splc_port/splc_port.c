@@ -128,6 +128,21 @@ static void wifi_task(void *arg)
         },
     };
 
+    /* Presence gate: with no module fitted (RDY floating) the vendor driver must not be
+     * started: the board keeps running (USB link, rules, RS485) without Wi-Fi. The probe is
+     * repeated every 5 s, so a module that is still booting, or fitted later, is picked up. */
+    bool absent_logged = false;
+    while (!meshwf_st67_module_present()) {
+        if (!absent_logged) {
+            log_warn(TAG, "ST67 module not detected on RDY: Wi-Fi/MQTT off, re-probing every 5 s");
+            absent_logged = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5000U));
+    }
+    if (absent_logged) {
+        log_info(TAG, "ST67 module detected, starting the driver");
+    }
+
     st67w611_status_t st = st67w611_init(&cfg);
     if (st == ST67W611_OK) {
         st = st67w611_start();

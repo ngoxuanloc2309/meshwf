@@ -143,6 +143,38 @@ static void rdy_irq_disarm(void)
 #endif
 }
 
+/* --------------------------------------------------------- module presence */
+
+bool meshwf_st67_module_present(void)
+{
+    GPIO_InitTypeDef g = {0};
+    g.Pin   = ST67SPI_RDY_PIN;
+    g.Mode  = GPIO_MODE_INPUT;      /* plain input: no EXTI while probing */
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+
+    bool present = true;
+    for (uint32_t round = 0U; round < 3U; round++) {
+        g.Pull = GPIO_PULLDOWN;
+        HAL_GPIO_Init(ST67SPI_RDY_PORT, &g);
+        delay_ms_os(2U);
+        GPIO_PinState with_pulldown = HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN);
+
+        g.Pull = GPIO_PULLUP;
+        HAL_GPIO_Init(ST67SPI_RDY_PORT, &g);
+        delay_ms_os(2U);
+        GPIO_PinState with_pullup = HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN);
+
+        if (with_pulldown != with_pullup) {   /* the pin follows our pull: nobody drives it */
+            present = false;
+            break;
+        }
+    }
+
+    g.Pull = present ? GPIO_NOPULL : GPIO_PULLDOWN;   /* floating RDY must not be left open */
+    HAL_GPIO_Init(ST67SPI_RDY_PORT, &g);
+    return present;
+}
+
 /* --------------------------------------------------------------- transfers */
 
 /* Polled full-duplex transfer; a missing side uses the zero source / the sink. */

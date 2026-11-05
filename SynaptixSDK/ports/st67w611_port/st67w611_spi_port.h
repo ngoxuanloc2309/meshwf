@@ -40,6 +40,16 @@ typedef struct {
 } meshwf_st67_pins_t;
 void meshwf_st67_port_get_pins(meshwf_st67_pins_t *pins);
 
+/* Module presence probe on the RDY line (call BEFORE st67w611_init(), task context,
+ * scheduler running). The module drives RDY, so its level does not follow the
+ * MCU's internal pull: the pin is read with a pull-down and then a pull-up, and the
+ * module counts as present only when both reads agree on every round. A floating
+ * pin (module not fitted / not powered) follows the pull and reports absent; it is
+ * then left with the pull-down, so it cannot pick up noise. Returns true when
+ * something drives RDY. A board with an external pull on RDY always reports
+ * present (the old behaviour). A module still booting can read absent: re-probe. */
+bool meshwf_st67_module_present(void);
+
 #ifdef __cplusplus
 }
 #endif
