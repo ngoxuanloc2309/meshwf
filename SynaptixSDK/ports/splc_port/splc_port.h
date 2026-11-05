@@ -34,7 +34,7 @@ extern "C" {
 /* Wi-Fi task: ST67 bring-up (init + start), then the worker of splc_wifi_port.c
  * (connect / scan / IP polling of the SimplePLC Wi-Fi block). */
 #ifndef SPLC_HOST_WIFI_TASK
-#define SPLC_HOST_WIFI_TASK          0
+#define SPLC_HOST_WIFI_TASK          1
 #endif
 #ifndef SPLC_HOST_WIFI_STACK_WORDS
 #define SPLC_HOST_WIFI_STACK_WORDS   1024U   /* 4 KB; vendor calls run on this stack */
