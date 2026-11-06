@@ -578,6 +578,12 @@ void board_hw_init(void)
 #if SPLC_MBM_ENABLE
     board_mbm_init();
 #endif
+#if SPLC_ZIGBEE_ENABLE
+    splc_zigbee_port_init();   /* USART2 + module: Zigbee_IO/port/splc_zigbee_port.c */
+#endif
+#if SPLC_INDICATOR_ENABLE
+    splc_indicators_port_init(); /* 3 LEDs: Zigbee_IO/port/splc_indicators_port.c (after the Zigbee port: it reads its state) */
+#endif
 }
 
 /* Transport handed to plc_modbus_cfg when no App link exists: no byte ever

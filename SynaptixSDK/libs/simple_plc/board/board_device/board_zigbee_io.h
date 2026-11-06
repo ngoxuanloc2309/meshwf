@@ -34,13 +34,21 @@
 #define DO3_PORT    GPIOB
 #define DO3_PIN     GPIO_PIN_1
 
+#define LED_POWER_PORT              GPIOC
+#define LED_POWER_PIN               GPIO_PIN_15
+
+#define LED_STATUS_PORT             GPIOC
+#define LED_STATUS_PIN              GPIO_PIN_14
+
+#define LED_LINK_PORT               GPIOC
+#define LED_LINK_PIN                GPIO_PIN_13
+
 /* UART_LOG: pDriver in board_hw_init() points at &hlpuart1 (extern in
  * Core/Inc/usart.h, CubeMX-generated) -- LPUART1_IRQHandler already
  * exists in Core/Src/stm32h5xx_it.c, so RX interrupt-driven logging
  * works without further .ioc changes. */
 #define UART_LOG    hlpuart1
 #define UART_RS485  huart1
-#define UART_ZIGBEE huart2
 #define ZIGBEE_TIM1 htim1
 
 /* RS485 App link (used when SPLC_PORT_USB_CDC = 0 in splcopts.h): USART1 with a
@@ -68,5 +76,21 @@
  * silently ignores any request whose unit_id byte differs from this
  * value. The App must match it (test_plc.py: --unit, default 1). */
 #define MODBUS_UNIT_ID    SPLC_MODBUS_UNIT_ID   /* product option, splcopts.h */
+
+#if SPLC_ZIGBEE_ENABLE
+/* Zigbee module (DRF1609H on USART2): NOT part of this board file. The product port
+ * Zigbee_IO/port/splc_zigbee_port.c owns the UART and registers the pipe with the
+ * library; board_hw_init() only calls this. Same prototype as splc_zigbee_port.h --
+ * repeated here so the board library does not need that folder on its include path. */
+void splc_zigbee_port_init(void);
+#endif
+
+#if SPLC_INDICATOR_ENABLE
+/* Connection-indicator LEDs: NOT part of this board file. The product port
+ * Zigbee_IO/port/splc_indicators_port.c writes the three LED pins and registers the protocols
+ * with the library; board_hw_init() only calls this. Same prototype as splc_indicators_port.h
+ * -- repeated here for the same reason as splc_zigbee_port_init(). */
+void splc_indicators_port_init(void);
+#endif
 
 #endif

@@ -41,6 +41,8 @@ static uint32_t s_gen;
 
 static splc_zigbee_ops_t s_ops;
 static bool              s_registered;
+static modbus_serial_port_t s_pipe;   /* built at register time from ops.read/write */
+static bool              s_pipe_ok;
 
 static bool is_key_reg(unsigned i) { return i >= R_KEY && i < (R_KEY + KEY_REGS); }
 
@@ -62,10 +64,61 @@ bool splc_zigbee_register(const splc_zigbee_ops_t *ops)
         log_error(TAG, "register: bad ops (NULL or no role)");
         return false;
     }
+    /* What THIS BUILD can serve: the Slave endpoint lives in plc_mbs and needs the second Modbus
+     * library (SPLC_MODBUS_LIB = MB) plus SPLC_MODBUS_SLAVE_ENABLE. A role the build cannot serve
+     * is dropped from the registration (logged), so the capability bits stay honest. */
+    uint8_t roles = (uint8_t)(ops->roles & (SPLC_ZIGBEE_ROLE_SLAVE | SPLC_ZIGBEE_ROLE_MASTER));
+#if !(SPLC_MODBUS_SLAVE_ENABLE && SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_MB)
+    if ((roles & SPLC_ZIGBEE_ROLE_SLAVE) != 0U) {
+        log_warn(TAG, "register: Slave role ignored (needs SPLC_MODBUS_SLAVE_ENABLE=1 and SPLC_MODBUS_LIB=MB)");
+        roles &= (uint8_t)~SPLC_ZIGBEE_ROLE_SLAVE;
+    }
+#endif
+    if (roles == 0U) {
+        log_error(TAG, "register: no role this build can serve");
+        return false;
+    }
+    /* A Slave needs a pipe to answer on: refuse the registration instead of declaring a
+     * role that cannot work (the same rule as the capability bits, decision 71). */
+    if ((roles & SPLC_ZIGBEE_ROLE_SLAVE) != 0U && (ops->read == NULL || ops->write == NULL)) {
+        log_error(TAG, "register: role Slave needs ops.read and ops.write");
+        return false;
+    }
+    /* A Master role without a pipe stays registrable (a port may only configure the module), but
+     * MB_READ / MB_WRITE blocks on Zigbee then report err_code 1: see plc_zigbee_master_supported(). */
     s_ops = *ops;
+    s_ops.roles = roles;           /* what the build serves, not what the port asked for */
     s_registered = true;
-    log_info(TAG, "port registered, roles 0x%02X", (unsigned)(ops->roles & 0x03U));
+    s_pipe_ok = (ops->read != NULL && ops->write != NULL);
+    memset(&s_pipe, 0, sizeof(s_pipe));
+    if (s_pipe_ok) {
+        s_pipe.read     = ops->read;
+        s_pipe.write    = ops->write;
+        s_pipe.set_tx   = NULL;            /* transparent module: no direction pin */
+        s_pipe.ctx      = ops->ctx;
+        s_pipe.baudrate = ops->baudrate;
+#if SPLC_MODBUS_LIB == SPLC_MODBUS_LIB_MB
+        s_pipe.frame_sync = SPLC_MODBUS_SYNC_LENGTH;   /* radio: no 3.5-char silence */
+#endif
+    }
+    log_info(TAG, "port registered, roles 0x%02X", (unsigned)(roles & 0x03U));
     return true;
+}
+
+const modbus_serial_port_t *splc_zigbee_serial_port(void)
+{
+    return (s_registered && s_pipe_ok) ? &s_pipe : NULL;
+}
+
+bool plc_zigbee_master_supported(void)
+{
+    return s_registered && s_pipe_ok && (s_ops.roles & SPLC_ZIGBEE_ROLE_MASTER) != 0U;
+}
+
+bool plc_zigbee_is_slave_after_commit(void)
+{
+    const uint16_t c = s_draft_open ? s_draft[R_CTRL] : s_run[R_CTRL];
+    return (c & PLC_ZIGBEE_CTRL_ENABLE) != 0U && (c & PLC_ZIGBEE_CTRL_ROLE_SLAVE) != 0U;
 }
 
 bool splc_zigbee_get_config(splc_zigbee_config_t *out, uint32_t *generation)
@@ -104,7 +157,13 @@ void plc_zigbee_init(void)
 
 uint32_t plc_zigbee_capability(void)
 {
-    return s_registered ? PLC_ZIGBEE_CAP_ZIGBEE : 0UL;
+    if (!s_registered) { return 0UL; }
+    uint32_t caps = PLC_ZIGBEE_CAP_ZIGBEE;
+    /* MODBUS_SLAVE (0x4000): only a Slave role the port supports AND the build serves (the
+     * endpoint in plc_mbs). MODBUS_MASTER (0x0100) stays with plc_mbm: Master over the Zigbee
+     * pipe is not written yet, so it is not declared on Zigbee's behalf. */
+    if ((s_ops.roles & SPLC_ZIGBEE_ROLE_SLAVE) != 0U) { caps |= 0x00004000UL; }
+    return caps;
 }
 
 void plc_zigbee_read(uint16_t offset, uint16_t quantity, uint16_t *registers_out)

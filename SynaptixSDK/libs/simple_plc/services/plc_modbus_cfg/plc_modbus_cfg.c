@@ -16,6 +16,9 @@
 #include "plc_mbw.h"        /* MB_WRITE blocks 0x1100..0x11FF (SPLC_MBW_ENABLE=1 only) */
 #include "plc_wifi.h"       /* Wi-Fi block 0x1300..0x13FF (SPLC_WIFI_ENABLE=1 only) */
 #include "plc_mqtt_tls.h"   /* TLS certificate block 0x0F00..0x0F43 (SPLC_MQTT_TLS_CERT_ENABLE=1 only) */
+#if SPLC_ZIGBEE_ENABLE
+#include "plc_zigbee.h"     /* Zigbee port block 0x1700..0x173F (SPLC_ZIGBEE_ENABLE=1 only) */
+#endif
 #if SPLC_MQTT_SUB_ENABLE
 #include "plc_mqtt_sub.h"    /* MQTT Subscribe blocks 0x0D80..0x0DFF (SPLC_MQTT_SUB_ENABLE=1 only) */
 #endif
@@ -27,6 +30,13 @@
 #endif
 
 static const char *TAG = "PLC_MODBUS_CFG";
+
+/* Drop the Zigbee draft on every COMMIT path that ends without applying it. */
+#if SPLC_ZIGBEE_ENABLE
+#define ZB_DISCARD_DRAFT() plc_zigbee_discard_draft()
+#else
+#define ZB_DISCARD_DRAFT() ((void)0)
+#endif
 
 /*
  * See plc_modbus_cfg.h for the overall design (static address-range
@@ -176,7 +186,7 @@ static void read_device_resource_info(uint16_t offset, uint16_t quantity, uint16
     }
 }
 
-#define SPLC_HAS_HW_CAPS (SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE || (SPLC_MODBUS_MAX_TRANSPORTS > 1) || SPLC_WIFI_ENABLE || SPLC_REAL_ENABLE)
+#define SPLC_HAS_HW_CAPS (SPLC_MQTT_ENABLE || SPLC_MBM_ENABLE || (SPLC_MODBUS_MAX_TRANSPORTS > 1) || SPLC_WIFI_ENABLE || SPLC_REAL_ENABLE || SPLC_ZIGBEE_ENABLE)
 #if SPLC_HAS_HW_CAPS
 /* --- HARDWARE_CAPABILITIES (0x0A08-0x0A09, RO, uint32, High Word first) -------------------------
  * App contract: docs/platform/SimplePLC_App_MCU_Structs_v2.0 (paa) and simpleplc_protocol_v2_0.h,
@@ -216,6 +226,9 @@ static void read_hw_capabilities(uint16_t offset, uint16_t quantity, uint16_t *r
 #endif
 #if SPLC_MQTT_TLS_CERT_ENABLE
     caps |= plc_mqtt_tls_capabilities();   /* 0x0080, only once the host registered its TLS functions */
+#endif
+#if SPLC_ZIGBEE_ENABLE
+    caps |= plc_zigbee_capability();       /* 0x8000, only once the host registered its Zigbee port */
 #endif
     if (g_device_resource_info.max_rules > 0U)        { caps |= SPLC_CAP_BASE_LOGIC; }
     if (g_device_resource_info.vreg_retain_count > 0U) { caps |= SPLC_CAP_RETENTIVE; }
@@ -1117,6 +1130,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 
@@ -1144,6 +1158,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 #endif
@@ -1172,6 +1187,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 #endif
@@ -1199,6 +1215,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 #endif
@@ -1223,6 +1240,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 #endif
@@ -1246,6 +1264,36 @@ static void write_commit_command(uint16_t value)
 #endif
 #endif
         plc_mqtt_sub_discard_draft();
+        ZB_DISCARD_DRAFT();
+        return;
+    }
+#endif
+
+#if SPLC_ZIGBEE_ENABLE
+    /* Zigbee draft: checked as a whole BEFORE anything is applied, like the others
+     * (plc_zigbee.h). Error 2. The Slave-conflict error 7 for an MB block that points at
+     * Zigbee (port field 4) is raised above, by plc_mbm / plc_mbw, which read the Zigbee draft. */
+    if (!plc_zigbee_validate_draft()) {
+        log_warn(TAG, "commit rejected: Zigbee draft failed validation");
+        s_config_status     = CONFIG_STATUS_ERROR;
+        s_config_error_code = SPLC_ERROR_INVALID_PARAMETER;
+        plc_fb_discard_draft();
+#if SPLC_MQTT_ENABLE
+        plc_mqtt_discard_draft();
+#endif
+#if SPLC_REAL_ENABLE
+        plc_tagtype_discard_draft();
+#endif
+#if SPLC_MBM_ENABLE
+        plc_mbm_discard_draft();
+#if SPLC_MBW_ENABLE
+        plc_mbw_discard_draft();
+#endif
+#endif
+#if SPLC_MQTT_SUB_ENABLE
+        plc_mqtt_sub_discard_draft();
+#endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 #endif
@@ -1273,6 +1321,7 @@ static void write_commit_command(uint16_t value)
 #if SPLC_MQTT_SUB_ENABLE
         plc_mqtt_sub_discard_draft();
 #endif
+        ZB_DISCARD_DRAFT();
         return;
     }
 
@@ -1308,6 +1357,11 @@ static void write_commit_command(uint16_t value)
     /* Like MQTT: blocks the Host wrote take their draft, the others keep running.
      * Before the Flash save so one record carries it all. */
     plc_mqtt_sub_commit_draft();
+#endif
+#if SPLC_ZIGBEE_ENABLE
+    /* Like MQTT: a block the Host wrote takes its draft, otherwise the running one stays
+     * (and its key). Before the Flash save so one record carries it all. */
+    plc_zigbee_commit_draft();
 #endif
 
     /*
@@ -1438,6 +1492,9 @@ static const modbus_block_t s_blocks[] = {
 #endif
 #if SPLC_WIFI_ENABLE
     { 0x1300, 0x13FF, true,  plc_wifi_read,               NULL },   /* Wi-Fi (WIFI-004); FC16/FC06 writes handled in cb_write_multiple_registers */
+#endif
+#if SPLC_ZIGBEE_ENABLE
+    { 0x1700, 0x173F, true,  plc_zigbee_read,             NULL },   /* Zigbee port (ZIGBEE-006); RUNNING config; FC16/FC06 writes go to the draft in cb_write_multiple_registers */
 #endif
 
     { 0x9000, 0x9000, true,  read_config_status,          NULL },
@@ -1616,6 +1673,18 @@ static nmbs_error cb_write_multiple_registers(uint16_t address, uint16_t quantit
         address < PLC_MQTT_BROKER_BASE + PLC_MQTT_BROKER_REGS) {
         return (plc_mqtt_broker_write((uint16_t)(address - PLC_MQTT_BROKER_BASE), quantity, registers)
                 == PLC_MQTT_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
+    }
+#endif
+
+#if SPLC_ZIGBEE_ENABLE
+    /*
+     * Zigbee port block (plc_zigbee.h): writes go to the draft and are checked at COMMIT,
+     * so a write inside the area always ACKs; only a request that runs past 0x173F is
+     * rejected (0x02). Registers +32..+63 are read-only: ACKed and ignored.
+     */
+    if (address >= PLC_ZIGBEE_BASE && address < PLC_ZIGBEE_BASE + PLC_ZIGBEE_REGS) {
+        return (plc_zigbee_write((uint16_t)(address - PLC_ZIGBEE_BASE), quantity, registers)
+                == PLC_ZIGBEE_WRITE_OK) ? NMBS_ERROR_NONE : NMBS_EXCEPTION_ILLEGAL_DATA_ADDRESS;
     }
 #endif
 

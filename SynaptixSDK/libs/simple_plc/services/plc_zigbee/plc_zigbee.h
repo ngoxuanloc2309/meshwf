@@ -56,11 +56,14 @@
  * Slave ID 236 / 237 (the DRF module treats 0xEC / 0xED as commands) is the PORT's to
  * refuse, not the library's (spec section 8).
  *
- * Not done here (later steps of decision 98): COMMIT error 7 for an MB_READ / MB_WRITE
- * block that points at Zigbee while the role is Slave (needs the port constant of the
- * block, still open with the App team), and the Slave endpoint that serves SLAVE-001 on
- * the Zigbee byte pipe. Because that endpoint does not exist yet, the role bits
- * (MODBUS_SLAVE 0x4000 / MODBUS_MASTER 0x0100) are NOT declared on behalf of the port.
+ * Zigbee as a Modbus Master (decision 98): an MB_READ / MB_WRITE block selects the Zigbee pipe with
+ * port field PLC_MBM_PORT_ZIGBEE (4, a firmware ASSUMPTION not yet confirmed by the App team).
+ * plc_mbm / plc_mbw then treat it as one more Master port (slot after the RS-485 ports): usable only
+ * when ENABLE = 1, ROLE = Master and the port registered the MASTER role with a byte pipe
+ * (plc_zigbee_master_supported()); otherwise the block reports err_code 1. COMMIT of an enabled
+ * block on Zigbee while the (draft or running) role is Slave => CONFIG_ERROR_CODE 7.
+ * The Slave endpoint that serves SLAVE-001 on the pipe lives in plc_mbs. MODBUS_MASTER 0x0100 is
+ * declared by plc_mbm (MBM = 1); 0x4000 only when the registered port keeps the Slave role.
  *
  * CLEAR_RULES does not touch this block; FACTORY_RESET wipes it, the key included.
  * Saved in the Flash Rule Table record (flag bit 8, SPLC_RULE_FLASH_ZIGBEE_FLAG), 64 B.
@@ -77,6 +80,7 @@
 #include <stdint.h>
 
 #include "splc_opt.h"
+#include "modbus_serial.h"   /* modbus_serial_port_t: the byte pipe has the same shape */
 
 #if SPLC_ZIGBEE_ENABLE
 
@@ -133,6 +137,20 @@ typedef struct {
     uint8_t roles;           /* SPLC_ZIGBEE_ROLE_* the port supports; at least one bit */
     /* optional; return false = no information (all zero is shown) */
     bool  (*status)(void *ctx, splc_zigbee_status_t *out);
+    /*
+     * Byte pipe to the module (e.g. the USART that talks to the DRF module), REQUIRED
+     * when `roles` has SLAVE. Same contract as modbus_serial_port_t (modbus_serial.h):
+     *   read : non-blocking, copy up to max_len bytes, return the count (0 = none).
+     *   write: send len bytes, return 0 when done, negative on failure; the module is
+     *          transparent and has no RS-485 direction pin, so there is no set_tx and no
+     *          echo to filter. Must not block longer than one frame's TX time.
+     * The library marks the pipe as "does not keep byte timing" (SPLC_MODBUS_SYNC_LENGTH)
+     * itself: RTU frames are cut by length, never by the 3.5-character silence.
+     * Both stay NULL for a port that only configures the module.
+     */
+    int   (*read)(void *ctx, uint8_t *buf, uint16_t max_len);
+    int   (*write)(void *ctx, const uint8_t *buf, uint16_t len, uint32_t timeout_ms);
+    uint32_t baudrate;       /* real UART speed to the module, for the library's timing */
 } splc_zigbee_ops_t;
 
 /* Decoded running configuration for the port. */
@@ -152,6 +170,20 @@ typedef struct {
  * registered) if ops is NULL or no role bit is set. Call before plc_engine_init() or
  * from board_init(); the Zigbee capability is declared from then on. */
 bool splc_zigbee_register(const splc_zigbee_ops_t *ops);
+
+/* The byte pipe registered above, shaped for the Modbus layer (read/write/baudrate, no
+ * set_tx, frame_sync = LENGTH). NULL when no port is registered or it gave no pipe.
+ * Valid until the next splc_zigbee_register(). For Layer 3 users (the Slave endpoint). */
+const modbus_serial_port_t *splc_zigbee_serial_port(void);
+
+/* true when a port is registered that supports the Master role AND gave a byte pipe: the
+ * Zigbee pipe can then be used as a Modbus Master port by MB_READ / MB_WRITE (plc_mbm). */
+bool plc_zigbee_master_supported(void);
+
+/* true when the block will be an ENABLED Slave once the pending COMMIT is applied (the draft
+ * if one was written, else the running block). plc_mbm / plc_mbw use it to refuse an enabled
+ * MB_READ / MB_WRITE block that names the Zigbee port (CONFIG_ERROR_CODE 7). */
+bool plc_zigbee_is_slave_after_commit(void);
 
 /* The RUNNING configuration. `generation` (may be NULL) changes whenever the running
  * configuration really changes (COMMIT, Flash load, FACTORY_RESET); the port re-applies
