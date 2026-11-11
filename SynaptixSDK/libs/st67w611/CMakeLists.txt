@@ -52,6 +52,7 @@ target_sources(st67w611 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/st67w611.c
     ${CMAKE_CURRENT_SOURCE_DIR}/port/src/st67w611_port.c
     ${CMAKE_CURRENT_SOURCE_DIR}/port/src/st67w611_vendor_bridge.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/port/src/st67w611_ready_recover.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/st67w611_backend_${ST67W611_ARCH_LC}.c
 )
 

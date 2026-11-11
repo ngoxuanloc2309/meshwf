@@ -23,4 +23,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # first. No CubeMX file is edited.
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     -Wl,--wrap=MX_FREERTOS_Init
+    # No EN pin: recover a missing "ready" banner with AT+RST
+    # (libs/st67w611/port/src/st67w611_ready_recover.c)
+    -Wl,--wrap=W61_WaitForReady
 )
