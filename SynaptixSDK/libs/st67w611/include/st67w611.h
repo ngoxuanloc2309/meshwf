@@ -176,6 +176,14 @@ st67w611_status_t st67w611_get_ip(uint8_t ip[4], uint8_t gateway[4],
                                   uint8_t netmask[4]);
 st67w611_status_t st67w611_ping(const char *host, uint32_t timeout_ms);
 st67w611_status_t st67w611_get_diagnostics(st67w611_diagnostics_t *diagnostics);
+/* Vendor log sink. The vendor driver logs through a queue that stays NULL until
+ * vLoggingInit() runs; without it the first vendor log call (often an error) hits
+ * configASSERT(pxQueue) in xQueueGenericSend and the whole system stops.
+ * Call once, from a task (scheduler running), BEFORE st67w611_init(). 'out' runs in the
+ * vendor OutputTask context and receives one formatted message per call. Idempotent. */
+typedef void (*st67w611_vendor_log_cb_t)(const char *message);
+st67w611_status_t st67w611_vendor_log_init(st67w611_vendor_log_cb_t out);
+
 const char *st67w611_status_string(st67w611_status_t status);
 const char *st67w611_state_string(st67w611_state_t state);
 

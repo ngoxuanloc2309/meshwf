@@ -154,18 +154,18 @@ static void st67_diag_task(void *arg)
         meshwf_st67_port_get_pins(&pins);
         meshwf_st67_port_get_diag(&d);
 
-        log_info(TAG, "DIAG t=%u stage=%u st=%d start_t0=%u start_ms=%u | pins rdy=%d en=%d boot=%d cs=%d",
+        log_debug(TAG, "DIAG t=%u stage=%u st=%d start_t0=%u start_ms=%u | pins rdy=%d en=%d boot=%d cs=%d",
                  (unsigned)now_ms(), (unsigned)s_st67_stage, (int)s_st67_last_status,
                  (unsigned)s_st67_start_t0, (unsigned)s_st67_start_ms,
                  (int)pins.rdy, (int)pins.en, (int)pins.boot, (int)pins.cs);
-        log_info(TAG, "DIAG port edge r=%u f=%u xfer=%u to=%u err=%u en_rel=%u rise1=%u gate=%u wait=%u thr=%u where=%u len=%u",
+        log_debug(TAG, "DIAG port edge r=%u f=%u xfer=%u to=%u err=%u en_rel=%u rise1=%u gate=%u wait=%u thr=%u where=%u len=%u",
                  (unsigned)d.rdy_rising, (unsigned)d.rdy_falling, (unsigned)d.transfers,
                  (unsigned)d.timeouts, (unsigned)d.errors,
                  (unsigned)d.en_release_tick, (unsigned)d.first_rise_tick,
                  (unsigned)d.gate_open_tick, (unsigned)d.gate_wait_ms,
                  (unsigned)d.throttled, (unsigned)d.where, (unsigned)d.last_len);
         if (d.vendor_ok != 0U) {
-            log_info(TAG, "DIAG vspi tx=%u rx=%u DROP=%u ioerr=%u hdr=%u txn_to=%u ack_to=%u mem=%u",
+            log_debug(TAG, "DIAG vspi tx=%u rx=%u DROP=%u ioerr=%u hdr=%u txn_to=%u ack_to=%u mem=%u",
                      (unsigned)d.v_tx_pkts, (unsigned)d.v_rx_pkts, (unsigned)d.v_rx_drop,
                      (unsigned)d.v_io_err, (unsigned)d.v_hdr_err, (unsigned)d.v_wait_txn_to,
                      (unsigned)d.v_wait_ack_to, (unsigned)d.v_mem_err);
@@ -184,9 +184,9 @@ static void st67_diag_task(void *arg)
                     break;
                 }
             }
-            log_info(TAG, "DIAG task %s: %s, stack min free=%u words, cpu=%u", watch[w], state, hwm, cpu);
+            log_debug(TAG, "DIAG task %s: %s, stack min free=%u words, cpu=%u", watch[w], state, hwm, cpu);
         }
-        log_info(TAG, "DIAG heap free=%u min_ever=%u",
+        log_debug(TAG, "DIAG heap free=%u min_ever=%u",
                  (unsigned)xPortGetFreeHeapSize(), (unsigned)xPortGetMinimumEverFreeHeapSize());
 
         /* Report every second during the bring-up, then back off once it is over. */
@@ -200,6 +200,12 @@ static void st67_diag_task(void *arg)
     }
 }
 #endif /* SPLC_HOST_ST67_DIAG */
+
+/* Vendor driver log -> the host logger, debug level. Runs in the vendor OutputTask. */
+static void st67_vendor_log_out(const char *message)
+{
+    log_debug(TAG, "vendor: %s", message);
+}
 
 static void st67_event_cb(st67w611_event_t event, void *event_data, void *user_context)
 {
@@ -256,6 +262,11 @@ static void wifi_task(void *arg)
     }
     if (absent_logged) {
         log_info(TAG, "ST67 module detected, starting the driver");
+    }
+
+    /* Vendor logging must be set up before the driver runs: its log queue is NULL until then. */
+    if (st67w611_vendor_log_init(st67_vendor_log_out) != ST67W611_OK) {
+        log_error(TAG, "ST67 vendor log init failed (vendor messages will be lost)");
     }
 
     s_st67_stage = ST67_STAGE_INIT;

@@ -4,6 +4,7 @@
 #include "w6x_api.h"
 #include "w6x_types.h"
 #include "w61_at_api.h"
+#include "logging.h"
 #include <stddef.h>
 #include <string.h>
 #include "FreeRTOS.h"
@@ -597,4 +598,14 @@ const char *st67w611_state_string(st67w611_state_t value)
     case ST67W611_STATE_ERROR: return "ERROR";
     default: return "UNKNOWN";
     }
+}
+
+st67w611_status_t st67w611_vendor_log_init(st67w611_vendor_log_cb_t out)
+{
+    static uint8_t done;
+    if (out == NULL) return ST67W611_ERR_INVALID_ARG;
+    if (done != 0U) return ST67W611_OK;
+    if (vLoggingInit(out) == NULL) return ST67W611_ERR_VENDOR;
+    done = 1U;
+    return ST67W611_OK;
 }
