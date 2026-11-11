@@ -166,7 +166,10 @@ See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 /* USER CODE BEGIN 1 */
-#define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}
+/* Records file/line/LR in g_splc_assert (ports/splc_port/splc_port.c) before halting.
+   Read after a hang: nm <elf> | findstr g_splc_assert, then -r32 <addr> 4. */
+void splc_assert_failed(const char *file, int line);
+#define configASSERT( x ) if ((x) == 0) { splc_assert_failed(__FILE__, __LINE__); }
 /* USER CODE END 1 */
 
 #define SysTick_Handler xPortSysTickHandler

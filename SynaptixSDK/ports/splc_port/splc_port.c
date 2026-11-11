@@ -23,6 +23,33 @@
 
 static const char *TAG = "SPLC_PORT";
 
+/* ------------------------------------------------------------------------ */
+/* configASSERT capture (see Core/Inc/FreeRTOSConfig.h, USER CODE 1)           */
+/* Plain globals, no logging: the failing assert may itself be in the log      */
+/* queue path. After a hang: nm | findstr g_splc_assert, then -r32 <addr> 4    */
+/* gives {magic, file ptr, line, lr}; read the file string with -r8 <ptr> 64.  */
+/* ------------------------------------------------------------------------ */
+
+typedef struct {
+    volatile uint32_t magic;       /* 0xA55E7700 once an assert has fired */
+    const char * volatile file;
+    volatile int32_t  line;
+    volatile uint32_t lr;          /* return address of the failing function */
+} splc_assert_info_t;
+
+splc_assert_info_t g_splc_assert;
+
+void splc_assert_failed(const char *file, int line)
+{
+    taskDISABLE_INTERRUPTS();
+    g_splc_assert.file  = file;
+    g_splc_assert.line  = (int32_t)line;
+    g_splc_assert.lr    = (uint32_t)(uintptr_t)__builtin_return_address(0);
+    g_splc_assert.magic = 0xA55E7700U;
+    for (;;) {
+    }
+}
+
 /* Wait of the ST67 task loop. With MQTT on, the same loop sends the queued publishes (one per
  * pass), so it runs faster; the Wi-Fi worker works off timestamps, not pass counts. */
 #ifndef SPLC_HOST_ST67_LOOP_MS

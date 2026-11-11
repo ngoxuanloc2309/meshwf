@@ -129,6 +129,16 @@ static void vendor_wifi_callback(W6X_event_id_t event_id, void *event_args)
     }
 }
 
+/* The vendor W6X_Net_Init() refuses to run unless APP_net_cb is registered ("Please register
+ * the APP callback before initializing the module") and, on that failure path, W6X_Net_DeInit()
+ * calls vSemaphoreDelete(NULL) -> configASSERT. The facade does not use vendor sockets, so
+ * this hook only has to exist; socket events are ignored. */
+static void vendor_net_callback(W6X_event_id_t event_id, void *event_args)
+{
+    (void)event_id;
+    (void)event_args;
+}
+
 static void vendor_error_callback(W6X_Status_t status, const char *function_name)
 {
     (void)function_name;
@@ -199,6 +209,7 @@ st67w611_status_t st67w611_init(const st67w611_config_t *new_config)
 
     memset(&vendor_callbacks, 0, sizeof(vendor_callbacks));
     vendor_callbacks.APP_wifi_cb = vendor_wifi_callback;
+    vendor_callbacks.APP_net_cb = vendor_net_callback;
     vendor_callbacks.APP_error_cb = vendor_error_callback;
     vendor_callbacks.APP_mqtt_cb = vendor_mqtt_callback;
     if (W6X_RegisterAppCb(&vendor_callbacks) != W6X_STATUS_OK) {
@@ -302,6 +313,7 @@ st67w611_status_t st67w611_reset(void)
     set_state(ST67W611_STATE_INITIALIZING, ST67W611_OK);
     memset(&vendor_callbacks, 0, sizeof(vendor_callbacks));
     vendor_callbacks.APP_wifi_cb = vendor_wifi_callback;
+    vendor_callbacks.APP_net_cb = vendor_net_callback;
     vendor_callbacks.APP_error_cb = vendor_error_callback;
     vendor_callbacks.APP_mqtt_cb = vendor_mqtt_callback;
     if (W6X_RegisterAppCb(&vendor_callbacks) != W6X_STATUS_OK) {
