@@ -19,7 +19,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os2.h"
-#include "gpdma.h"
 #include "i2c.h"
 #include "icache.h"
 #include "usart.h"
@@ -101,11 +100,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_GPDMA1_Init();
   MX_ICACHE_Init();
   MX_LPUART1_UART_Init();
   MX_USART1_UART_Init();
-  MX_USART2_UART_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
@@ -116,6 +113,7 @@ int main(void)
   MX_I2C1_Init();
   MX_RNG_Init();
   MX_SPI1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */

@@ -75,9 +75,21 @@ static void splc_task(void *arg)
     splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
 
+#ifndef SPLC_HOST_SPLC_HEARTBEAT_MS
+#define SPLC_HOST_SPLC_HEARTBEAT_MS 2000U   /* bring-up aid: 0 = off */
+#endif
+#if SPLC_HOST_SPLC_HEARTBEAT_MS
+    TickType_t next_hb = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_SPLC_HEARTBEAT_MS);
+#endif
     for (;;) {
         plc_engine_poll();
         sx_mqtt_pump((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+#if SPLC_HOST_SPLC_HEARTBEAT_MS
+        if ((int32_t)(xTaskGetTickCount() - next_hb) >= 0) {
+            log_info(TAG, "SPLC heartbeat tick=%u", (unsigned)xTaskGetTickCount());
+            next_hb = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_SPLC_HEARTBEAT_MS);
+        }
+#endif
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
@@ -107,6 +119,7 @@ static st67w611_status_t st67_after_restart(void *context)
 static void wifi_task(void *arg)
 {
     (void)arg;
+    log_info(TAG, "ST67 task started");
 
     static const st67w611_lifecycle_hooks_t hooks = {
         .before_transport_restart = NULL,
@@ -143,9 +156,13 @@ static void wifi_task(void *arg)
         log_info(TAG, "ST67 module detected, starting the driver");
     }
 
+    log_info(TAG, "calling st67w611_init");
     st67w611_status_t st = st67w611_init(&cfg);
+    log_info(TAG, "st67w611_init -> %s", st67w611_status_string(st));
     if (st == ST67W611_OK) {
+        log_info(TAG, "calling st67w611_start (RDY wait up to 4 s)");
         st = st67w611_start();
+        log_info(TAG, "st67w611_start -> %s", st67w611_status_string(st));
     }
     if (st != ST67W611_OK) {
         log_error(TAG, "ST67 bring-up failed: %s", st67w611_status_string(st));

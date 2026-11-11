@@ -17,6 +17,19 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+/* Bring-up diagnostics (temporary): first transfers + a 1 s RDY heartbeat, through the
+ * SimplePLC logger. Set ST67_PORT_DIAG_LOG 0 to remove it. Never called from an ISR. */
+#ifndef ST67_PORT_DIAG_LOG
+#define ST67_PORT_DIAG_LOG 1
+#endif
+#if ST67_PORT_DIAG_LOG
+#include "splc_log.h"
+static const char *ST67_TAG = "ST67_SPI";
+#define ST67_DIAG(...) log_info(ST67_TAG, __VA_ARGS__)
+#else
+#define ST67_DIAG(...) ((void)0)
+#endif
+
 _Static_assert(ST67_RDY_IRQ_PRIORITY >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY,
                "RDY EXTI priority is above configMAX_SYSCALL_INTERRUPT_PRIORITY: "
                "the vendor ISR path calls FreeRTOS FromISR functions");
@@ -184,6 +197,15 @@ static int transfer_polled(const void *tx, void *rx, uint16_t len, uint32_t time
     uint8_t       *rxb = (rx != NULL) ? (uint8_t *)rx       : s_sink;
     int rc = sx_spi_transfer(&s_spi, txb, rxb, len, timeout_ms);
     s_diag.transfer_count++;
+#if ST67_PORT_DIAG_LOG
+    if (s_diag.transfer_count <= 12U) {
+        ST67_DIAG("xfer#%u len=%u rc=%d tx=%02X %02X %02X %02X rx=%02X %02X %02X %02X RDY=%d",
+                  (unsigned)s_diag.transfer_count, (unsigned)len, rc,
+                  txb[0], (len > 1U) ? txb[1] : 0U, (len > 2U) ? txb[2] : 0U, (len > 3U) ? txb[3] : 0U,
+                  rxb[0], (len > 1U) ? rxb[1] : 0U, (len > 2U) ? rxb[2] : 0U, (len > 3U) ? rxb[3] : 0U,
+                  (int)HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN));
+    }
+#endif
     if (rc == SX_SPI_ERR_TIMEOUT) {
         s_diag.timeout_count++;
     }
@@ -238,6 +260,10 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
     hw_pins_safe_state();   /* no EN pin: the module was powered with the board */
 #endif
     s_inited = 1U;
+    ST67_DIAG("port_init done: RDY=%d clock=%lu Hz mode=%d CS active_%s",
+              (int)HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN),
+              (unsigned long)ST67_SPI_CLOCK_HZ, (int)ST67_SPI_MODE,
+              (ST67_CS_ACTIVE_HIGH != 0) ? "high" : "low");
     return 0;
 }
 
@@ -341,7 +367,18 @@ static int port_set_cs(void *context, bool asserted)
 static bool port_read_ready(void *context)
 {
     (void)context;
-    return HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN) == GPIO_PIN_SET;
+    bool level = (HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN) == GPIO_PIN_SET);
+#if ST67_PORT_DIAG_LOG
+    static TickType_t s_last_hb;
+    TickType_t now = xTaskGetTickCount();
+    if ((TickType_t)(now - s_last_hb) >= pdMS_TO_TICKS(1000U)) {
+        s_last_hb = now;
+        ST67_DIAG("read_ready polled: RDY=%d rise=%u fall=%u xfers=%u timeouts=%u",
+                  (int)level, (unsigned)s_diag.rdy_rising, (unsigned)s_diag.rdy_falling,
+                  (unsigned)s_diag.transfer_count, (unsigned)s_diag.timeout_count);
+    }
+#endif
+    return level;
 }
 
 static int port_hardware_reset(void *context, uint32_t timeout_ms)
