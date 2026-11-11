@@ -98,6 +98,13 @@ static void splc_task(void *arg)
 #ifndef SPLC_HOST_ST67_DIAG
 #define SPLC_HOST_ST67_DIAG        1
 #endif
+/* Above every ST67 / SPI task (Modem_Process 8, spi_xfer_engine 7) so that a task stuck in a
+ * loop cannot starve it: if the DIAG lines keep coming, nothing is spinning at a higher
+ * priority and a task showing READY with growing cpu= is the spinner. If they stop too,
+ * interrupts are off (assert) or the core faulted. */
+#ifndef SPLC_HOST_ST67_DIAG_PRIO
+#define SPLC_HOST_ST67_DIAG_PRIO   20U
+#endif
 #ifndef SPLC_HOST_ST67_DIAG_MS
 #define SPLC_HOST_ST67_DIAG_MS     1000U
 #endif
@@ -151,11 +158,12 @@ static void st67_diag_task(void *arg)
                  (unsigned)now_ms(), (unsigned)s_st67_stage, (int)s_st67_last_status,
                  (unsigned)s_st67_start_t0, (unsigned)s_st67_start_ms,
                  (int)pins.rdy, (int)pins.en, (int)pins.boot, (int)pins.cs);
-        log_info(TAG, "DIAG port edge r=%u f=%u xfer=%u to=%u err=%u en_rel=%u rise1=%u gate=%u wait=%u",
+        log_info(TAG, "DIAG port edge r=%u f=%u xfer=%u to=%u err=%u en_rel=%u rise1=%u gate=%u wait=%u thr=%u where=%u len=%u",
                  (unsigned)d.rdy_rising, (unsigned)d.rdy_falling, (unsigned)d.transfers,
                  (unsigned)d.timeouts, (unsigned)d.errors,
                  (unsigned)d.en_release_tick, (unsigned)d.first_rise_tick,
-                 (unsigned)d.gate_open_tick, (unsigned)d.gate_wait_ms);
+                 (unsigned)d.gate_open_tick, (unsigned)d.gate_wait_ms,
+                 (unsigned)d.throttled, (unsigned)d.where, (unsigned)d.last_len);
         if (d.vendor_ok != 0U) {
             log_info(TAG, "DIAG vspi tx=%u rx=%u DROP=%u ioerr=%u hdr=%u txn_to=%u ack_to=%u mem=%u",
                      (unsigned)d.v_tx_pkts, (unsigned)d.v_rx_pkts, (unsigned)d.v_rx_drop,
@@ -167,14 +175,16 @@ static void st67_diag_task(void *arg)
         for (size_t w = 0U; w < sizeof(watch) / sizeof(watch[0]); w++) {
             const char *state = "absent";
             unsigned hwm = 0U;
+            unsigned cpu = 0U;
             for (UBaseType_t i = 0U; i < n; i++) {
                 if (strcmp(ts[i].pcTaskName, watch[w]) == 0) {
                     state = task_state_str(ts[i].eCurrentState);
                     hwm = (unsigned)ts[i].usStackHighWaterMark;
+                    cpu = (unsigned)ts[i].ulRunTimeCounter;
                     break;
                 }
             }
-            log_info(TAG, "DIAG task %s: %s, stack min free=%u words", watch[w], state, hwm);
+            log_info(TAG, "DIAG task %s: %s, stack min free=%u words, cpu=%u", watch[w], state, hwm, cpu);
         }
         log_info(TAG, "DIAG heap free=%u min_ever=%u",
                  (unsigned)xPortGetFreeHeapSize(), (unsigned)xPortGetMinimumEverFreeHeapSize());
@@ -313,7 +323,8 @@ bool splc_host_start(void)
         return false;
     }
 #if SPLC_HOST_ST67_DIAG
-    (void)xTaskCreate(st67_diag_task, "ST67dbg", (configSTACK_DEPTH_TYPE)768U, NULL, 3U, NULL);
+    (void)xTaskCreate(st67_diag_task, "ST67dbg", (configSTACK_DEPTH_TYPE)768U, NULL,
+                       SPLC_HOST_ST67_DIAG_PRIO, NULL);
 #endif
 #endif
 

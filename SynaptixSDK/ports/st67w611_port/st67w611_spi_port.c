@@ -46,7 +46,15 @@ static struct {
     volatile uint32_t first_rise_tick;   /* tick of the first RDY rising edge after it */
     volatile uint32_t gate_open_tick;    /* tick the first-transfer gate was opened (0 = closed) */
     volatile uint32_t gate_wait_ms;      /* how long the engine waited at the gate */
+    volatile uint32_t throttled;         /* times the engine was forced to yield (hot loop) */
+    volatile uint8_t  where;             /* breadcrumb: last place reached (see dbg_at) */
+    volatile uint16_t last_len;          /* length of the last transfer entered */
 } s_diag;
+
+/* Breadcrumb for diagnosis without a debugger: 1 port_init entered, 2 SPI up, 3 RDY armed,
+ * 4 gate armed (port_init done), 5 engine waits at the gate, 6 gate released,
+ * 7/8 port_transfer in/out, 9/10 port_transfer_dma in/out, 11 cancel. */
+#define DBG_AT(n)  (s_diag.where = (uint8_t)(n))
 
 /* TX source for RX-only transfers (zeroed at init, never written afterwards) and
  * sink for TX-only transfers. */
@@ -169,11 +177,15 @@ static void gate_arm(void)
 static void gate_wait(void)
 {
     uint32_t waited = 0U;
+    if (s_gate_open == 0U) {
+        DBG_AT(5);
+    }
     while (s_gate_open == 0U && waited < ST67_GATE_MAX_WAIT_MS) {
         delay_ms_os(1U);
         waited++;
     }
     if (waited != 0U) {
+        DBG_AT(6);
         s_diag.gate_wait_ms = waited;
         if (s_gate_open == 0U) {
             ST67_LOG("st67 gate: not opened after %u ms, continuing", (unsigned)waited);
@@ -300,6 +312,7 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
 {
     (void)context;
     SPI_HandleTypeDef *h = ST67_SPI_HANDLE;
+    DBG_AT(1);
 
     s_complete_cb  = cb;
     s_complete_ctx = cb_ctx;
@@ -330,7 +343,9 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
         ST67_LOG("st67 spi: sx_spi_init failed");
         return -1;
     }
+    DBG_AT(2);
     rdy_irq_arm();          /* before the power sequence so no RDY edge is missed */
+    DBG_AT(3);
     memset(s_zeros, 0, sizeof(s_zeros));
 
     s_inited = 1U;          /* before EN is released: a transfer may start at once */
@@ -344,6 +359,7 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
 #if ST67_GATE_FIRST_XFER
     gate_arm();             /* last thing: no blocking call may follow in this function */
 #endif
+    DBG_AT(4);
     return 0;
 }
 
@@ -379,9 +395,12 @@ static int port_transfer(void *context, const void *tx, void *rx,
     if (length == 0U) {
         return 0;
     }
+    s_diag.last_len = length;
+    DBG_AT(7);
     s_busy = 1U;
     int r = transfer_polled(tx, rx, length, timeout_ms);
     s_busy = 0U;
+    DBG_AT(8);
     return r;
 }
 
@@ -411,9 +430,12 @@ static int port_transfer_dma(void *context, const void *tx, void *rx, uint16_t l
      * HW_XFER_DONE event from the callback and waits for it afterwards, so a
      * completion that arrives before the wait is not lost. On failure return -1
      * WITHOUT calling back (a callback would leave a stale event bit). */
+    s_diag.last_len = length;
+    DBG_AT(9);
     s_busy = 1U;
     int r = transfer_polled(tx, rx, length, 1000U);
     s_busy = 0U;
+    DBG_AT(10);
     if (r == 0 && s_complete_cb != NULL) {
         s_complete_cb(s_complete_ctx, 0);
     }
@@ -440,6 +462,23 @@ static int port_set_cs(void *context, bool asserted)
 #if ST67_GATE_FIRST_XFER
         gate_wait();
 #endif
+        /* Hot-loop guard. The vendor engine (priority above SPLC and the diag task) loops
+         * while RDY is high and skips its blocking ack wait when a transfer fails or the
+         * header is invalid: that would starve every lower-priority task (no log at all).
+         * More than ST67_MAX_CS_PER_TICK assertions in one tick -> sleep one tick. */
+        static TickType_t s_last_tick;
+        static uint32_t   s_same_tick;
+        TickType_t now = xTaskGetTickCount();
+        if (now == s_last_tick) {
+            if (++s_same_tick >= ST67_MAX_CS_PER_TICK) {
+                s_same_tick = 0U;
+                s_diag.throttled++;
+                delay_ms_os(1U);
+            }
+        } else {
+            s_last_tick = now;
+            s_same_tick = 0U;
+        }
         sx_spi_select(&s_spi);      /* honours the minimum idle gap, then the setup time */
     } else {
         sx_spi_deselect(&s_spi);
@@ -530,6 +569,9 @@ void meshwf_st67_port_get_diag(meshwf_st67_diag_t *d)
     d->first_rise_tick = s_diag.first_rise_tick;
     d->gate_open_tick  = s_diag.gate_open_tick;
     d->gate_wait_ms    = s_diag.gate_wait_ms;
+    d->throttled       = s_diag.throttled;
+    d->where           = s_diag.where;
+    d->last_len        = s_diag.last_len;
 
     st67w611_vendor_spi_stats_t v;
     d->vendor_ok = (st67w611_vendor_bridge_get_spi_stats(&v) == 0) ? 1U : 0U;

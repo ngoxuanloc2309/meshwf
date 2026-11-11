@@ -62,6 +62,9 @@ typedef struct {
     uint32_t first_rise_tick;   /* first RDY rising edge after that release */
     uint32_t gate_open_tick;    /* first-transfer gate opened (0 = still closed) */
     uint32_t gate_wait_ms;      /* how long the engine task waited at the gate */
+    uint32_t throttled;         /* hot-loop guard activations (> 0: engine was spinning) */
+    uint8_t  where;             /* breadcrumb of the port, see DBG_AT in the .c */
+    uint16_t last_len;          /* length of the last transfer entered */
     /* Vendor SPI engine counters (valid only when vendor_ok != 0, i.e. after the
      * engine exists). rx_drop > 0 with rx_pkts == 0 means a message was read and
      * thrown away (e.g. "ready" received before the RX queue was bound). */

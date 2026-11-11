@@ -143,6 +143,11 @@
 #define ST67_GATE_MAX_WAIT_MS      3000U   /* safety: never block the engine longer */
 #endif
 
+/* Hot-loop guard of the engine task, see port_set_cs(). */
+#ifndef ST67_MAX_CS_PER_TICK
+#define ST67_MAX_CS_PER_TICK       20U
+#endif
+
 /* --- RDY interrupt ------------------------------------------------------- */
 /* The vendor engine needs BOTH edges of RDY (rising = data ready, falling =
  * header ack). CubeMX configured PB0 rising-only and generated no EXTI0 IRQ
