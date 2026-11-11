@@ -108,6 +108,41 @@
 #define ST67_BOOT_WAIT_MS          100U   /* wait after EN goes high */
 #endif
 
+/* 1 (default): port_init() only holds the module in reset (EN low) and releases EN
+ * from a one-shot software timer. The vendor engine task (priority above the task
+ * that calls W6X_Init) starts transferring as soon as RDY is high, and port_init()
+ * runs inside spi_transaction_init(), BEFORE spi_bind(AT_CMD): the module's first
+ * "ready" message would be read with no RX queue bound and silently dropped, and
+ * W61_WaitForReady() would then time out. The timer task (low priority) only runs
+ * once the bring-up task blocks in W61_WaitForReady(), i.e. after the bind.
+ * 0 = old behaviour (reset pulse + wait inside port_init). */
+#ifndef ST67_DEFER_EN_RELEASE
+#define ST67_DEFER_EN_RELEASE      1
+#endif
+/* Delay of the EN release after port_init() (the timer also needs the scheduler to
+ * give it the CPU, so the real delay is >= this). */
+#ifndef ST67_EN_RELEASE_DELAY_MS
+#define ST67_EN_RELEASE_DELAY_MS   ST67_EN_LOW_MS
+#endif
+
+/* 1 (default): the first transfer of the vendor engine task is held back at CS
+ * assertion until a one-shot software timer has fired. Needed when the module is
+ * already running and holding "ready" with RDY high (no EN pin, or EN tied high):
+ * port_init() runs inside spi_transaction_init(), BEFORE spi_bind(AT_CMD), and the
+ * engine task (priority above the bring-up task) would read "ready" at once and
+ * drop it for lack of an RX queue. The timer task has the lowest priority, so it
+ * only runs once the bring-up task blocks in W61_WaitForReady(), i.e. after the
+ * bind and after Modem_Process exists. 0 = no gating. */
+#ifndef ST67_GATE_FIRST_XFER
+#define ST67_GATE_FIRST_XFER       1
+#endif
+#ifndef ST67_GATE_DELAY_MS
+#define ST67_GATE_DELAY_MS         5U
+#endif
+#ifndef ST67_GATE_MAX_WAIT_MS
+#define ST67_GATE_MAX_WAIT_MS      3000U   /* safety: never block the engine longer */
+#endif
+
 /* --- RDY interrupt ------------------------------------------------------- */
 /* The vendor engine needs BOTH edges of RDY (rising = data ready, falling =
  * header ack). CubeMX configured PB0 rising-only and generated no EXTI0 IRQ

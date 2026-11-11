@@ -145,6 +145,23 @@ void *spi_port_memcpy(void *dest, const void *src, unsigned int len)
     return memcpy(dest, src, len);
 }
 
+int st67w611_vendor_bridge_get_spi_stats(st67w611_vendor_spi_stats_t *out)
+{
+    struct spi_stat st;
+    if (out == NULL || spi_get_stats(&st) != 0) {
+        return -1;
+    }
+    out->tx_pkts               = (uint32_t)st.tx_pkts;
+    out->rx_pkts               = (uint32_t)st.rx_pkts;
+    out->rx_drop               = (uint32_t)st.rx_drop;
+    out->io_err                = (uint32_t)st.io_err;
+    out->hdr_err               = (uint32_t)st.hdr_err;
+    out->wait_txn_timeouts     = (uint32_t)st.wait_txn_timeouts;
+    out->wait_hdr_ack_timeouts = (uint32_t)st.wait_hdr_ack_timeouts;
+    out->mem_err               = (uint32_t)st.mem_err;
+    return 0;
+}
+
 void st67w611_port_notify_ready_rising(void)
 {
     (void)spi_on_txn_data_ready();

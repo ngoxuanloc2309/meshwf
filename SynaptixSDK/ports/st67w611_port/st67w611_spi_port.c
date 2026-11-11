@@ -10,25 +10,14 @@
 #include "st67w611_spi_port.h"
 #include "st67w611_spi_port_conf.h"
 #include "st67w611_port_events.h"
+#include "st67w611_vendor_bridge.h"
 #include "sx_gpio.h"
 #include "sx_spi.h"
 
 #include <string.h>
 #include "FreeRTOS.h"
 #include "task.h"
-
-/* Bring-up diagnostics (temporary): first transfers + a 1 s RDY heartbeat, through the
- * SimplePLC logger. Set ST67_PORT_DIAG_LOG 0 to remove it. Never called from an ISR. */
-#ifndef ST67_PORT_DIAG_LOG
-#define ST67_PORT_DIAG_LOG 1
-#endif
-#if ST67_PORT_DIAG_LOG
-#include "splc_log.h"
-static const char *ST67_TAG = "ST67_SPI";
-#define ST67_DIAG(...) log_info(ST67_TAG, __VA_ARGS__)
-#else
-#define ST67_DIAG(...) ((void)0)
-#endif
+#include "timers.h"
 
 _Static_assert(ST67_RDY_IRQ_PRIORITY >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY,
                "RDY EXTI priority is above configMAX_SYSCALL_INTERRUPT_PRIORITY: "
@@ -53,6 +42,10 @@ static struct {
     volatile uint32_t dma_error_count;
     volatile uint32_t rdy_rising;
     volatile uint32_t rdy_falling;
+    volatile uint32_t en_release_tick;   /* tick of the deferred EN release (0 = not yet) */
+    volatile uint32_t first_rise_tick;   /* tick of the first RDY rising edge after it */
+    volatile uint32_t gate_open_tick;    /* tick the first-transfer gate was opened (0 = closed) */
+    volatile uint32_t gate_wait_ms;      /* how long the engine waited at the gate */
 } s_diag;
 
 /* TX source for RX-only transfers (zeroed at init, never written afterwards) and
@@ -98,6 +91,98 @@ static void module_reset_pulse(void)
 }
 #endif
 
+#if ST67_HAS_EN && ST67_DEFER_EN_RELEASE
+static TimerHandle_t s_en_timer;
+
+/* Timer task context: only a GPIO write, no blocking. */
+static void en_release_cb(TimerHandle_t t)
+{
+    (void)t;
+    s_diag.en_release_tick = (uint32_t)xTaskGetTickCount();
+    HAL_GPIO_WritePin(ST67SPI_EN_PORT, ST67SPI_EN_PIN, GPIO_PIN_SET);
+}
+
+/* Hold the module in reset now, release EN later (see ST67_DEFER_EN_RELEASE). */
+static int module_reset_deferred(void)
+{
+    hw_pins_safe_state();
+    HAL_GPIO_WritePin(ST67SPI_EN_PORT, ST67SPI_EN_PIN, GPIO_PIN_RESET);
+    s_diag.en_release_tick = 0U;
+    s_diag.first_rise_tick = 0U;
+    /* A module that stayed powered across an MCU reset may still drive RDY high for a
+     * moment: wait until it drops, otherwise spi_transaction_init() would see RDY high
+     * and start a transfer against a module in reset. This wait (vTaskDelay) must come
+     * BEFORE the timer is started: from the start on, the timer may run whenever this
+     * task blocks. After it, nothing blocks until W61_WaitForReady(), i.e. after the
+     * vendor spi_bind(). */
+    for (uint32_t i = 0U; i < 20U &&
+         HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN) == GPIO_PIN_SET; i++) {
+        delay_ms_os(1U);
+    }
+    if (s_en_timer == NULL) {
+        s_en_timer = xTimerCreate("st67_en", pdMS_TO_TICKS(ST67_EN_RELEASE_DELAY_MS),
+                                  pdFALSE, NULL, en_release_cb);
+    }
+    if (s_en_timer == NULL || xTimerStart(s_en_timer, pdMS_TO_TICKS(100U)) != pdPASS) {
+        /* No timer: fall back to the old synchronous pulse rather than leave EN low. */
+        ST67_LOG("st67: EN timer failed, synchronous reset");
+        module_reset_pulse();
+    }
+    return 0;
+}
+#endif
+
+#if ST67_GATE_FIRST_XFER
+static volatile uint8_t s_gate_open = 1U;   /* open until port_init() closes it */
+static TimerHandle_t    s_gate_timer;
+
+/* Timer task context: runs only when every higher-priority task is blocked. */
+static void gate_cb(TimerHandle_t t)
+{
+    (void)t;
+    s_diag.gate_open_tick = (uint32_t)xTaskGetTickCount();
+    s_gate_open = 1U;
+}
+
+/* Called at the very end of port_init(): nothing may block after this until the
+ * bring-up task waits for "ready". */
+static void gate_arm(void)
+{
+    s_diag.gate_open_tick = 0U;
+    s_diag.gate_wait_ms   = 0U;
+    if (s_gate_timer == NULL) {
+        s_gate_timer = xTimerCreate("st67_gate", pdMS_TO_TICKS(ST67_GATE_DELAY_MS),
+                                    pdFALSE, NULL, gate_cb);
+    }
+    if (s_gate_timer == NULL) {
+        s_gate_open = 1U;                     /* no timer: old behaviour */
+        return;
+    }
+    s_gate_open = 0U;
+    if (xTimerStart(s_gate_timer, 0U) != pdPASS) {
+        s_gate_open = 1U;
+    }
+}
+
+/* Engine task context (port_set_cs). Waits with vTaskDelay so lower-priority
+ * tasks (the bring-up task, then the timer task) can run. */
+static void gate_wait(void)
+{
+    uint32_t waited = 0U;
+    while (s_gate_open == 0U && waited < ST67_GATE_MAX_WAIT_MS) {
+        delay_ms_os(1U);
+        waited++;
+    }
+    if (waited != 0U) {
+        s_diag.gate_wait_ms = waited;
+        if (s_gate_open == 0U) {
+            ST67_LOG("st67 gate: not opened after %u ms, continuing", (unsigned)waited);
+            s_gate_open = 1U;
+        }
+    }
+}
+#endif /* ST67_GATE_FIRST_XFER */
+
 /* ---------------------------------------------------------------- RDY edge */
 
 void meshwf_st67_port_on_rdy_edge(uint16_t gpio_pin, bool rising)
@@ -106,6 +191,9 @@ void meshwf_st67_port_on_rdy_edge(uint16_t gpio_pin, bool rising)
         return;
     }
     if (rising) {
+        if (s_diag.first_rise_tick == 0U) {
+            s_diag.first_rise_tick = (uint32_t)xTaskGetTickCountFromISR();
+        }
         s_diag.rdy_rising++;
         st67w611_port_notify_ready_rising();
     } else {
@@ -197,15 +285,6 @@ static int transfer_polled(const void *tx, void *rx, uint16_t len, uint32_t time
     uint8_t       *rxb = (rx != NULL) ? (uint8_t *)rx       : s_sink;
     int rc = sx_spi_transfer(&s_spi, txb, rxb, len, timeout_ms);
     s_diag.transfer_count++;
-#if ST67_PORT_DIAG_LOG
-    if (s_diag.transfer_count <= 12U) {
-        ST67_DIAG("xfer#%u len=%u rc=%d tx=%02X %02X %02X %02X rx=%02X %02X %02X %02X RDY=%d",
-                  (unsigned)s_diag.transfer_count, (unsigned)len, rc,
-                  txb[0], (len > 1U) ? txb[1] : 0U, (len > 2U) ? txb[2] : 0U, (len > 3U) ? txb[3] : 0U,
-                  rxb[0], (len > 1U) ? rxb[1] : 0U, (len > 2U) ? rxb[2] : 0U, (len > 3U) ? rxb[3] : 0U,
-                  (int)HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN));
-    }
-#endif
     if (rc == SX_SPI_ERR_TIMEOUT) {
         s_diag.timeout_count++;
     }
@@ -254,16 +333,17 @@ static int port_init(void *context, st67w611_transfer_complete_cb_t cb, void *cb
     rdy_irq_arm();          /* before the power sequence so no RDY edge is missed */
     memset(s_zeros, 0, sizeof(s_zeros));
 
-#if ST67_HAS_EN
+    s_inited = 1U;          /* before EN is released: a transfer may start at once */
+#if ST67_HAS_EN && ST67_DEFER_EN_RELEASE
+    (void)module_reset_deferred();
+#elif ST67_HAS_EN
     module_reset_pulse();
 #else
     hw_pins_safe_state();   /* no EN pin: the module was powered with the board */
 #endif
-    s_inited = 1U;
-    ST67_DIAG("port_init done: RDY=%d clock=%lu Hz mode=%d CS active_%s",
-              (int)HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN),
-              (unsigned long)ST67_SPI_CLOCK_HZ, (int)ST67_SPI_MODE,
-              (ST67_CS_ACTIVE_HIGH != 0) ? "high" : "low");
+#if ST67_GATE_FIRST_XFER
+    gate_arm();             /* last thing: no blocking call may follow in this function */
+#endif
     return 0;
 }
 
@@ -357,6 +437,9 @@ static int port_set_cs(void *context, bool asserted)
 {
     (void)context;
     if (asserted) {
+#if ST67_GATE_FIRST_XFER
+        gate_wait();
+#endif
         sx_spi_select(&s_spi);      /* honours the minimum idle gap, then the setup time */
     } else {
         sx_spi_deselect(&s_spi);
@@ -367,18 +450,7 @@ static int port_set_cs(void *context, bool asserted)
 static bool port_read_ready(void *context)
 {
     (void)context;
-    bool level = (HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN) == GPIO_PIN_SET);
-#if ST67_PORT_DIAG_LOG
-    static TickType_t s_last_hb;
-    TickType_t now = xTaskGetTickCount();
-    if ((TickType_t)(now - s_last_hb) >= pdMS_TO_TICKS(1000U)) {
-        s_last_hb = now;
-        ST67_DIAG("read_ready polled: RDY=%d rise=%u fall=%u xfers=%u timeouts=%u",
-                  (int)level, (unsigned)s_diag.rdy_rising, (unsigned)s_diag.rdy_falling,
-                  (unsigned)s_diag.transfer_count, (unsigned)s_diag.timeout_count);
-    }
-#endif
-    return level;
+    return HAL_GPIO_ReadPin(ST67SPI_RDY_PORT, ST67SPI_RDY_PIN) == GPIO_PIN_SET;
 }
 
 static int port_hardware_reset(void *context, uint32_t timeout_ms)
@@ -442,6 +514,32 @@ static int port_get_diagnostics(void *context, st67w611_port_diagnostics_t *d)
     d->ready_rising_count  = s_diag.rdy_rising;
     d->ready_falling_count = s_diag.rdy_falling;
     return 0;
+}
+
+void meshwf_st67_port_get_diag(meshwf_st67_diag_t *d)
+{
+    if (d == NULL) {
+        return;
+    }
+    d->rdy_rising      = s_diag.rdy_rising;
+    d->rdy_falling     = s_diag.rdy_falling;
+    d->transfers       = s_diag.transfer_count;
+    d->timeouts        = s_diag.timeout_count;
+    d->errors          = s_diag.error_count;
+    d->en_release_tick = s_diag.en_release_tick;
+    d->first_rise_tick = s_diag.first_rise_tick;
+    d->gate_open_tick  = s_diag.gate_open_tick;
+    d->gate_wait_ms    = s_diag.gate_wait_ms;
+
+    st67w611_vendor_spi_stats_t v;
+    d->vendor_ok = (st67w611_vendor_bridge_get_spi_stats(&v) == 0) ? 1U : 0U;
+    if (d->vendor_ok != 0U) {
+        d->v_tx_pkts = v.tx_pkts;   d->v_rx_pkts = v.rx_pkts;
+        d->v_rx_drop = v.rx_drop;   d->v_io_err  = v.io_err;
+        d->v_hdr_err = v.hdr_err;   d->v_mem_err = v.mem_err;
+        d->v_wait_txn_to = v.wait_txn_timeouts;
+        d->v_wait_ack_to = v.wait_hdr_ack_timeouts;
+    }
 }
 
 const st67w611_port_ops_t meshwf_st67_port_ops = {

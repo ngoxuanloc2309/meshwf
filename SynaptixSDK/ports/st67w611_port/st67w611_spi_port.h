@@ -50,6 +50,27 @@ void meshwf_st67_port_get_pins(meshwf_st67_pins_t *pins);
  * present (the old behaviour). A module still booting can read absent: re-probe. */
 bool meshwf_st67_module_present(void);
 
+/* Counters for bring-up diagnosis (task context, no ISR use needed). Ticks are
+ * FreeRTOS ticks; 0 = the event has not happened yet. */
+typedef struct {
+    uint32_t rdy_rising;
+    uint32_t rdy_falling;
+    uint32_t transfers;
+    uint32_t timeouts;
+    uint32_t errors;
+    uint32_t en_release_tick;   /* deferred EN release */
+    uint32_t first_rise_tick;   /* first RDY rising edge after that release */
+    uint32_t gate_open_tick;    /* first-transfer gate opened (0 = still closed) */
+    uint32_t gate_wait_ms;      /* how long the engine task waited at the gate */
+    /* Vendor SPI engine counters (valid only when vendor_ok != 0, i.e. after the
+     * engine exists). rx_drop > 0 with rx_pkts == 0 means a message was read and
+     * thrown away (e.g. "ready" received before the RX queue was bound). */
+    uint8_t  vendor_ok;
+    uint32_t v_tx_pkts, v_rx_pkts, v_rx_drop, v_io_err, v_hdr_err;
+    uint32_t v_wait_txn_to, v_wait_ack_to, v_mem_err;
+} meshwf_st67_diag_t;
+void meshwf_st67_port_get_diag(meshwf_st67_diag_t *d);
+
 #ifdef __cplusplus
 }
 #endif

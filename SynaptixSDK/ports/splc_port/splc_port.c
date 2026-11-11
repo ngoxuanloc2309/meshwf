@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -75,21 +76,9 @@ static void splc_task(void *arg)
     splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
 
-#ifndef SPLC_HOST_SPLC_HEARTBEAT_MS
-#define SPLC_HOST_SPLC_HEARTBEAT_MS 2000U   /* bring-up aid: 0 = off */
-#endif
-#if SPLC_HOST_SPLC_HEARTBEAT_MS
-    TickType_t next_hb = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_SPLC_HEARTBEAT_MS);
-#endif
     for (;;) {
         plc_engine_poll();
         sx_mqtt_pump((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-#if SPLC_HOST_SPLC_HEARTBEAT_MS
-        if ((int32_t)(xTaskGetTickCount() - next_hb) >= 0) {
-            log_info(TAG, "SPLC heartbeat tick=%u", (unsigned)xTaskGetTickCount());
-            next_hb = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_SPLC_HEARTBEAT_MS);
-        }
-#endif
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
@@ -99,6 +88,109 @@ static void splc_task(void *arg)
 /* ------------------------------------------------------------------------ */
 
 #if SPLC_HOST_WIFI_TASK
+
+/* ---- bring-up diagnosis without a debugger -----------------------------------------
+ * wifi_task records where it is (s_st67_stage) and ST67dbg, a low priority task, prints
+ * it once a second together with: pins, RDY edge counters, SPI transfer counters, the
+ * vendor SPI engine counters and the state / stack headroom of the tasks involved.
+ * It does not touch the driver and never blocks on it, so it keeps reporting while
+ * the bring-up task is stuck inside the vendor code. */
+#ifndef SPLC_HOST_ST67_DIAG
+#define SPLC_HOST_ST67_DIAG        1
+#endif
+#ifndef SPLC_HOST_ST67_DIAG_MS
+#define SPLC_HOST_ST67_DIAG_MS     1000U
+#endif
+
+enum {
+    ST67_STAGE_IDLE = 0,
+    ST67_STAGE_PROBE,      /* waiting for the module on RDY */
+    ST67_STAGE_INIT,       /* st67w611_init() */
+    ST67_STAGE_START,      /* st67w611_start(): W6X_Init + Wi-Fi init (blocking) */
+    ST67_STAGE_READY,
+    ST67_STAGE_FAILED,
+};
+static volatile uint8_t  s_st67_stage;
+static volatile int32_t  s_st67_last_status;
+static volatile uint32_t s_st67_start_t0;     /* ms tick when st67w611_start() was called */
+static volatile uint32_t s_st67_start_ms;     /* how long it took (0 = still running) */
+
+static inline uint32_t now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+#if SPLC_HOST_ST67_DIAG
+static const char *task_state_str(eTaskState st)
+{
+    switch (st) {
+    case eRunning:   return "RUN";
+    case eReady:     return "READY";
+    case eBlocked:   return "BLOCKED";
+    case eSuspended: return "SUSP";
+    case eDeleted:   return "DEL";
+    default:         return "?";
+    }
+}
+
+static void st67_diag_task(void *arg)
+{
+    (void)arg;
+    static TaskStatus_t ts[24];
+    static const char *const watch[] = { "Modem_Process", "spi_xfer_engine", "ST67", "SPLC" };
+    uint32_t after_end = 0U;
+
+    for (;;) {
+        meshwf_st67_pins_t pins;
+        meshwf_st67_diag_t d;
+        memset(&d, 0, sizeof(d));
+        meshwf_st67_port_get_pins(&pins);
+        meshwf_st67_port_get_diag(&d);
+
+        log_info(TAG, "DIAG t=%u stage=%u st=%d start_t0=%u start_ms=%u | pins rdy=%d en=%d boot=%d cs=%d",
+                 (unsigned)now_ms(), (unsigned)s_st67_stage, (int)s_st67_last_status,
+                 (unsigned)s_st67_start_t0, (unsigned)s_st67_start_ms,
+                 (int)pins.rdy, (int)pins.en, (int)pins.boot, (int)pins.cs);
+        log_info(TAG, "DIAG port edge r=%u f=%u xfer=%u to=%u err=%u en_rel=%u rise1=%u gate=%u wait=%u",
+                 (unsigned)d.rdy_rising, (unsigned)d.rdy_falling, (unsigned)d.transfers,
+                 (unsigned)d.timeouts, (unsigned)d.errors,
+                 (unsigned)d.en_release_tick, (unsigned)d.first_rise_tick,
+                 (unsigned)d.gate_open_tick, (unsigned)d.gate_wait_ms);
+        if (d.vendor_ok != 0U) {
+            log_info(TAG, "DIAG vspi tx=%u rx=%u DROP=%u ioerr=%u hdr=%u txn_to=%u ack_to=%u mem=%u",
+                     (unsigned)d.v_tx_pkts, (unsigned)d.v_rx_pkts, (unsigned)d.v_rx_drop,
+                     (unsigned)d.v_io_err, (unsigned)d.v_hdr_err, (unsigned)d.v_wait_txn_to,
+                     (unsigned)d.v_wait_ack_to, (unsigned)d.v_mem_err);
+        }
+
+        UBaseType_t n = uxTaskGetSystemState(ts, (UBaseType_t)(sizeof(ts) / sizeof(ts[0])), NULL);
+        for (size_t w = 0U; w < sizeof(watch) / sizeof(watch[0]); w++) {
+            const char *state = "absent";
+            unsigned hwm = 0U;
+            for (UBaseType_t i = 0U; i < n; i++) {
+                if (strcmp(ts[i].pcTaskName, watch[w]) == 0) {
+                    state = task_state_str(ts[i].eCurrentState);
+                    hwm = (unsigned)ts[i].usStackHighWaterMark;
+                    break;
+                }
+            }
+            log_info(TAG, "DIAG task %s: %s, stack min free=%u words", watch[w], state, hwm);
+        }
+        log_info(TAG, "DIAG heap free=%u min_ever=%u",
+                 (unsigned)xPortGetFreeHeapSize(), (unsigned)xPortGetMinimumEverFreeHeapSize());
+
+        /* Report every second during the bring-up, then back off once it is over. */
+        uint32_t wait_ms = SPLC_HOST_ST67_DIAG_MS;
+        if (s_st67_stage == ST67_STAGE_READY || s_st67_stage == ST67_STAGE_FAILED) {
+            if (++after_end > 3U) {
+                wait_ms = 30000U;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+    }
+}
+#endif /* SPLC_HOST_ST67_DIAG */
+
 static void st67_event_cb(st67w611_event_t event, void *event_data, void *user_context)
 {
     (void)user_context;
@@ -119,7 +211,6 @@ static st67w611_status_t st67_after_restart(void *context)
 static void wifi_task(void *arg)
 {
     (void)arg;
-    log_info(TAG, "ST67 task started");
 
     static const st67w611_lifecycle_hooks_t hooks = {
         .before_transport_restart = NULL,
@@ -145,6 +236,7 @@ static void wifi_task(void *arg)
      * started: the board keeps running (USB link, rules, RS485) without Wi-Fi. The probe is
      * repeated every 5 s, so a module that is still booting, or fitted later, is picked up. */
     bool absent_logged = false;
+    s_st67_stage = ST67_STAGE_PROBE;
     while (!meshwf_st67_module_present()) {
         if (!absent_logged) {
             log_warn(TAG, "ST67 module not detected on RDY: Wi-Fi/MQTT off, re-probing every 5 s");
@@ -156,17 +248,21 @@ static void wifi_task(void *arg)
         log_info(TAG, "ST67 module detected, starting the driver");
     }
 
-    log_info(TAG, "calling st67w611_init");
+    s_st67_stage = ST67_STAGE_INIT;
     st67w611_status_t st = st67w611_init(&cfg);
-    log_info(TAG, "st67w611_init -> %s", st67w611_status_string(st));
     if (st == ST67W611_OK) {
-        log_info(TAG, "calling st67w611_start (RDY wait up to 4 s)");
+        s_st67_start_t0 = now_ms();
+        s_st67_stage = ST67_STAGE_START;
         st = st67w611_start();
-        log_info(TAG, "st67w611_start -> %s", st67w611_status_string(st));
+        s_st67_start_ms = now_ms() - s_st67_start_t0;
+        log_info(TAG, "st67w611_start returned %d after %u ms", (int)st, (unsigned)s_st67_start_ms);
     }
+    s_st67_last_status = (int32_t)st;
     if (st != ST67W611_OK) {
+        s_st67_stage = ST67_STAGE_FAILED;
         log_error(TAG, "ST67 bring-up failed: %s", st67w611_status_string(st));
     } else {
+        s_st67_stage = ST67_STAGE_READY;
         log_info(TAG, "ST67 READY");
         splc_wifi_port_set_ready(true);   /* from now on connect / scan are accepted */
     }
@@ -216,6 +312,9 @@ bool splc_host_start(void)
                     NULL, SPLC_HOST_WIFI_PRIO, NULL) != pdPASS) {
         return false;
     }
+#if SPLC_HOST_ST67_DIAG
+    (void)xTaskCreate(st67_diag_task, "ST67dbg", (configSTACK_DEPTH_TYPE)768U, NULL, 3U, NULL);
+#endif
 #endif
 
     started = true;
