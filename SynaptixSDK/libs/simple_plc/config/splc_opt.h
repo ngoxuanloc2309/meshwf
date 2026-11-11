@@ -48,6 +48,8 @@
 #define SPLC_BOARD_DATALOGGER            3
 #define SPLC_BOARD_GATEWAY               4
 #define SPLC_BOARD_WIFI_IO               5
+#define SPLC_BOARD_DTU_ZIGBEE            6
+#define SPLC_BOARD_DTU_WIFI              7
 
 /* Modbus protocol library behind the App link (plc_modbus_cfg). */
 #define SPLC_MODBUS_LIB_NANO             1   /* nanoMODBUS (libs/nanomodbus): RTU + TCP */
@@ -507,6 +509,16 @@
 #ifndef SPLC_ADC_BUILTIN
 #define SPLC_ADC_BUILTIN                 1
 #endif
+/* SPLC_UART_BUILTIN 1 (default): build the STM32H5 sx_uart driver (platforms/stm32/stm32h5/uart),
+ *   which owns HAL_UART_RxCpltCallback() and the UART RX interrupt flow. Boards that bring up
+ *   their own UARTs (board_zigbee_io, board_wifi_io) need it.
+ * 0: the HOST firmware owns every UART (and its own HAL_UART_RxCpltCallback()); SimplePLC builds
+ *   no UART driver and reaches the lines only through byte ports the product registers. Without
+ *   this the host and the library both define HAL_UART_RxCpltCallback() -> duplicate symbol.
+ *   CMake reads this option from splcopts.h. */
+#ifndef SPLC_UART_BUILTIN
+#define SPLC_UART_BUILTIN                1
+#endif
 
 /* --- External RTC (registered hooks) ----------------------------------
  * 0 (default) = the clock is the Layer 1 contract sx_rtc_*() (built-in STM32H5
@@ -558,7 +570,7 @@
 #if (SPLC_PLATFORM < SPLC_PLATFORM_STM32H5) || (SPLC_PLATFORM > SPLC_PLATFORM_ESP32)
 #error "SPLC_PLATFORM must be one of the SPLC_PLATFORM_* selectors"
 #endif
-#if (SPLC_BOARD < SPLC_BOARD_ZIGBEE_IO_4DI_4DO) || (SPLC_BOARD > SPLC_BOARD_WIFI_IO)
+#if (SPLC_BOARD < SPLC_BOARD_ZIGBEE_IO_4DI_4DO) || (SPLC_BOARD > SPLC_BOARD_DTU_WIFI)
 #error "SPLC_BOARD must be one of the SPLC_BOARD_* selectors"
 #endif
 #if (SPLC_FLASH_SIZE_KB < 16)
@@ -735,6 +747,9 @@
 #endif
 #if (SPLC_ADC_BUILTIN != 0) && (SPLC_ADC_BUILTIN != 1)
 #error "SPLC_ADC_BUILTIN must be 0 or 1"
+#endif
+#if (SPLC_UART_BUILTIN != 0) && (SPLC_UART_BUILTIN != 1)
+#error "SPLC_UART_BUILTIN must be 0 or 1"
 #endif
 #if (SPLC_LOG_LEVEL < 0) || (SPLC_LOG_LEVEL > 4)
 #error "SPLC_LOG_LEVEL must be 0..4"

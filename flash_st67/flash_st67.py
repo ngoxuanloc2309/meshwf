@@ -181,7 +181,7 @@ def main():
     if not a.sdk:
         sys.exit("ERROR: --sdk is required (try --list to see ports)")
 
-    scripts = find_scripts_dir(a.sdk)
+    scripts = os.path.abspath(find_scripts_dir(os.path.abspath(a.sdk)))
     bins = os.path.join(scripts, "Binaries")
     bin_dir = os.path.join(bins, "NCP_Binaries")
     qdir = os.path.join(bins, "QConn_Flash")

@@ -25,6 +25,8 @@ set(SPLC_BOARD_TABLE
     "SPLC_BOARD_DATALOGGER|datalogger"
     "SPLC_BOARD_GATEWAY|ethernet_wifi_gateway"
     "SPLC_BOARD_WIFI_IO|wifi_io"
+    "SPLC_BOARD_DTU_ZIGBEE|dtu_zigbee"
+    "SPLC_BOARD_DTU_WIFI|dtu_wifi"
 )
 # Row format: "<selector macro name>|<dir under platforms/>|<library target>"
 set(SPLC_PLATFORM_TABLE
@@ -148,6 +150,10 @@ if(SPLC_RTC_EXTERNAL)
 endif()
 message(STATUS "SimplePLC RTC      : builtin=${SPLC_RTC_BUILTIN} external=${SPLC_RTC_EXTERNAL} (builtin 1 = STM32H5 RTC driver; builtin 0 = host's sx_rtc_*; external 1 = registered hooks, plc_rtc_register())")
 message(STATUS "SimplePLC ADC      : ${SPLC_ADC_BUILTIN} (1 = built-in STM32H5 ADC driver, 0 = host's sx_adc_*)")
+# SPLC_UART_BUILTIN 1 (default): build the STM32H5 sx_uart driver. 0: the host firmware owns every
+# UART (and HAL_UART_RxCpltCallback()); no UART driver is compiled (config/splc_opt.h).
+splc_read_flag(SPLC_UART_BUILTIN SPLC_UART_BUILTIN)
+message(STATUS "SimplePLC UART     : ${SPLC_UART_BUILTIN} (1 = built-in STM32H5 sx_uart driver, 0 = host owns the UARTs)")
 
 # --- USB-CDC port module ------------------------------------------------
 # SPLC_PORT_USB_CDC 1: build the optional USB-CDC module (port/usb/ + TinyUSB
