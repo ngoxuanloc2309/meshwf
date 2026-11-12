@@ -2,6 +2,7 @@
 #include "splc_wifi_port.h"
 #include "splc_rtc_port.h"
 #include "sx_mqtt.h"
+#include "st67_net_probe.h"   /* TEMPORARY TCP-listener test, see st67_net_probe.h */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -326,6 +327,8 @@ static void wifi_task(void *arg)
         if (st == ST67W611_OK) {   /* MQTT client of the module: only after the bring-up */
             sx_mqtt_service((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
                             splc_wifi_port_has_ip());
+            st67_net_probe_service((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+                                   splc_wifi_port_has_ip());
         }
 #if !SPLC_WIFI_ENABLE
         vTaskDelay(pdMS_TO_TICKS(250U));   /* the service call is a no-op without the Wi-Fi block */

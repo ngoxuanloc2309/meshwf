@@ -1,13 +1,17 @@
 # components/st67 - MQTT client of the ST67W611 module (vendor AT driver), see st67_mqtt.h.
 #
-# The facade (libs/st67w611) is Wi-Fi only and does not build the vendor MQTT files, so this
-# component compiles them itself with the same include paths and ST67_ARCH as the facade.
+# The facade (libs/st67w611) is Wi-Fi only and does not build the vendor MQTT files, so
+# this component compiles them itself with the same include paths and ST67_ARCH as the facade.
 # ST67_ARCH arrives through the PUBLIC compile definition of the st67w611 target.
+#
+# st67_net_probe.c is a TEMPORARY TCP-listener test (see st67_net_probe.h). The vendor socket
+# code (w6x_net.c) is already built by the facade, so nothing else is added for it.
 set(ST67_VENDOR_DRV "${ST67W611_VENDOR_DIR}/Middlewares/ST/ST67W6X_Network_Driver")
 
 add_library(sx_st67 STATIC
     st67_mqtt.c
     st67_cert_store.c
+    st67_net_probe.c
     ${ST67_VENDOR_DRV}/Core/w6x_mqtt.c
     ${ST67_VENDOR_DRV}/Driver/W61_at/w61_at_mqtt.c
 )

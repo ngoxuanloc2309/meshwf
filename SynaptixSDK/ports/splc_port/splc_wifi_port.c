@@ -28,6 +28,11 @@ static const char *TAG = "SPLC_WIFI";
 #ifndef WIFI_PASSWORD_DEFAULT
 #define WIFI_PASSWORD_DEFAULT   ""
 #endif
+/* While idle (no connect / scan running) the worker re-reads the link state this often, so a
+ * dropped link is noticed and logged even when the module sends no event. */
+#ifndef SPLC_HOST_WIFI_LINK_CHECK_MS
+#define SPLC_HOST_WIFI_LINK_CHECK_MS    10000U
+#endif
 /* Pause between two default-connect attempts while the link is down. */
 #ifndef SPLC_HOST_WIFI_DEFAULT_RETRY_MS
 #define SPLC_HOST_WIFI_DEFAULT_RETRY_MS 30000U
@@ -78,6 +83,9 @@ static volatile bool         s_stored;
 static volatile bool         s_user_touched;
 
 /* Worker-private (no lock needed). */
+static uint32_t              s_link_next_ms;      /* next idle link check, 0 = at once */
+static uint16_t              s_logged_conn = 0xFFFFU;   /* last link state printed */
+static uint16_t              s_logged_err;
 static uint32_t              s_logged_ip;         /* last IP printed (0 = none), worker only */
 static uint32_t              s_default_next_ms;   /* 0 = first attempt allowed at once */
 static bool                  s_default_logged;    /* the "why not" line is printed once */
@@ -489,6 +497,46 @@ void splc_wifi_port_set_ready(bool ready)
     }
 }
 
+/* ---- link state log ----------------------------------------------------------------- */
+
+static const char *conn_name(uint16_t c)
+{
+    switch (c) {
+    case PLC_WIFI_CONN_DISCONNECTED:     return "DISCONNECTED";
+    case PLC_WIFI_CONN_CONNECTING:       return "CONNECTING";
+    case PLC_WIFI_CONN_CONNECTED:        return "CONNECTED (no IP yet)";
+    case PLC_WIFI_CONN_GOT_IP:           return "GOT_IP";
+    case PLC_WIFI_CONN_AUTH_FAILED:      return "AUTH_FAILED";
+    case PLC_WIFI_CONN_SSID_NOT_FOUND:   return "SSID_NOT_FOUND";
+    case PLC_WIFI_CONN_AP_MODE_ACTIVE:   return "AP_MODE_ACTIVE";
+    default:                             return "UNKNOWN";
+    }
+}
+
+/* Worker only. Prints one log_info line each time the real link state (or its error) changes.
+ * Never called from the vendor callback context, so the events stay cheap. */
+static void link_log(void)
+{
+    taskENTER_CRITICAL();
+    const uint16_t conn = s_live.conn;
+    const uint16_t err  = s_live.err;
+    taskEXIT_CRITICAL();
+
+    if (conn == s_logged_conn && err == s_logged_err) {
+        return;
+    }
+    if (conn == PLC_WIFI_CONN_DISCONNECTED) {
+        s_logged_ip = 0U;                      /* the next IP is printed again */
+    }
+    if (err != 0U) {
+        log_info(TAG, "Wi-Fi link: %s (error %u)", conn_name(conn), (unsigned)err);
+    } else {
+        log_info(TAG, "Wi-Fi link: %s", conn_name(conn));
+    }
+    s_logged_conn = conn;
+    s_logged_err = err;
+}
+
 /* ---- default network ---------------------------------------------------------------- */
 
 static void default_connect(void)
@@ -608,6 +656,15 @@ void splc_wifi_port_service(uint32_t wait_ms)
     }
 
     default_service(now);
+
+    /* Idle: re-read the link now and then so a dropped link shows up in the log. */
+    if (!s_connecting && s_scan_state != PLC_WIFI_SCAN_SCANNING &&
+        time_reached(now_ms(), s_link_next_ms)) {
+        s_link_next_ms = now_ms() + SPLC_HOST_WIFI_LINK_CHECK_MS;
+        if (s_link_next_ms == 0U) { s_link_next_ms = 1U; }
+        refresh_link();
+    }
+    link_log();
 
     /* A scan whose end never arrives must not leave the App waiting forever. */
     if (s_scan_state == PLC_WIFI_SCAN_SCANNING && time_reached(now, s_scan_deadline_ms)) {
