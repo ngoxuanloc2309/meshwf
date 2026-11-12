@@ -10,6 +10,8 @@
 #include "main.h"                /* CubeMX: LED1/LED2/LED3 pin labels, HAL GPIO */
 #include "splc_log.h"
 #include "plc_indicator.h"       /* library: splc_indicator_init(), splc_indicator_register() */
+#include "FreeRTOS.h"
+#include "task.h"
 #include "splc_wifi_port.h"
 #if SPLC_MQTT_ENABLE
 #include "st67_mqtt.h"
@@ -67,6 +69,14 @@ static SPLC_LINK_STATE mqtt_state(void *ctx)
 }
 #endif
 
+/* Bring-up aid: at start each LED is lit alone for SPLC_IND_SELFTEST_MS (POWER, STATUS, LINK),
+ * with a log line before each, so you can match the pin to the physical LED and see the
+ * polarity. 0 = off. Set it to 0 in splcopts.h once the LEDs are confirmed. Blocks the engine
+ * task for 3 x this time at start-up (before the first scan). */
+#ifndef SPLC_IND_SELFTEST_MS
+#define SPLC_IND_SELFTEST_MS 500U
+#endif
+
 /* ---- init ------------------------------------------------------------------------------- */
 
 static const char *TAG = "IND_PORT";
@@ -75,6 +85,21 @@ void splc_indicators_port_init(void)
 {
     static const splc_ind_ops_t ops = { .set = led_set, .ctx = NULL };
 
+#if SPLC_IND_SELFTEST_MS > 0U
+    {
+        static const char *const name[SPLC_LED_COUNT] = { "POWER (PC15)", "STATUS (PC14)", "LINK (PC13)" };
+        for (unsigned i = 0U; i < (unsigned)SPLC_LED_COUNT; i++) {
+            log_info(TAG, "LED test: %s on", name[i]);
+            led_set((SPLC_LED_ID)i, true, NULL);
+            vTaskDelay(pdMS_TO_TICKS(SPLC_IND_SELFTEST_MS));
+            led_set((SPLC_LED_ID)i, false, NULL);
+        }
+    }
+#endif
+    /* Pin state as the hardware has it: MODER bits 27:26 / 29:28 / 31:30 = 01 means output. */
+    log_info(TAG, "GPIOC MODER=0x%08lX ODR=0x%04lX (PC13..15 expect MODER 01 each)",
+             (unsigned long)GPIOC->MODER, (unsigned long)GPIOC->ODR);
+
     if (!splc_indicator_init(&ops)) {
         log_error(TAG, "indicator init FAILED");
         return;
@@ -82,7 +107,7 @@ void splc_indicators_port_init(void)
 
     static const splc_ind_proto_t wifi = {
         .name       = "wifi",
-        .pattern    = { .on_ms = 100U, .off_ms = 900U, .count = 1U, .pause_ms = 0U },   /* 1 flash / s */
+        .pattern    = { .on_ms = 1000U, .off_ms = 1000U, .count = 1U, .pause_ms = 0U },   /* 1 flash / s */
         .get_state  = wifi_state,
         .ctx        = NULL,
         .depends_on = 0U,
@@ -95,7 +120,7 @@ void splc_indicators_port_init(void)
 #if SPLC_MQTT_ENABLE
     static const splc_ind_proto_t mqtt = {
         .name       = "mqtt",
-        .pattern    = { .on_ms = 100U, .off_ms = 200U, .count = 2U, .pause_ms = 1000U }, /* 2 flashes, pause */
+        .pattern    = { .on_ms = 1000U, .off_ms = 2000U, .count = 2U, .pause_ms = 2000U }, /* 2 flashes, pause */
         .get_state  = mqtt_state,
         .ctx        = NULL,
         .depends_on = 1U,        /* row index + 1 of "wifi" (the first registered row) */
@@ -105,6 +130,8 @@ void splc_indicators_port_init(void)
     }
 #endif
 
+    log_info(TAG, "GPIOC ODR after init=0x%04lX (POWER lit: PC15 bit = %s)", (unsigned long)GPIOC->ODR,
+             SPLC_IND_LED_ACTIVE_LOW ? "0" : "1");
     log_info(TAG, "indicator ready (POWER PC15, STATUS PC14, LINK PC13, active %s)",
              SPLC_IND_LED_ACTIVE_LOW ? "low" : "high");
 }
