@@ -78,6 +78,7 @@ static volatile bool         s_stored;
 static volatile bool         s_user_touched;
 
 /* Worker-private (no lock needed). */
+static uint32_t              s_logged_ip;         /* last IP printed (0 = none), worker only */
 static uint32_t              s_default_next_ms;   /* 0 = first attempt allowed at once */
 static bool                  s_default_logged;    /* the "why not" line is printed once */
 static uint32_t              s_ip_poll_until_ms;   /* 0 = not waiting for an IP */
@@ -235,6 +236,13 @@ static void refresh_link(void)
                                ((uint32_t)ip[2] << 8) | (uint32_t)ip[3];
             live_set(PLC_WIFI_CONN_GOT_IP, 0U, v);
             s_ip_poll_until_ms = 0U;
+            if (v != s_logged_ip) {            /* print once per new address */
+                s_logged_ip = v;
+                log_info(TAG, "Wi-Fi connected, IP %u.%u.%u.%u  gateway %u.%u.%u.%u  netmask %u.%u.%u.%u",
+                         (unsigned)ip[0], (unsigned)ip[1], (unsigned)ip[2], (unsigned)ip[3],
+                         (unsigned)gw[0], (unsigned)gw[1], (unsigned)gw[2], (unsigned)gw[3],
+                         (unsigned)nm[0], (unsigned)nm[1], (unsigned)nm[2], (unsigned)nm[3]);
+            }
         } else {
             live_set(PLC_WIFI_CONN_CONNECTED, 0U, 0U);
             if (s_ip_poll_until_ms == 0U) {    /* DHCP still running: poll for a while */
@@ -251,6 +259,7 @@ static void refresh_link(void)
     case ST67W611_STATE_READY:
         live_set(PLC_WIFI_CONN_DISCONNECTED, 0U, 0U);
         s_ip_poll_until_ms = 0U;
+        s_logged_ip = 0U;
         break;
     case ST67W611_STATE_ERROR:
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_DRIVER, 0U);
