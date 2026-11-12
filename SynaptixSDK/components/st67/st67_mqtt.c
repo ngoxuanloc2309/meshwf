@@ -79,6 +79,8 @@ static st67_mqtt_status_t copy_str(uint8_t *dst, size_t dst_size, const char *sr
     return ST67_MQTT_OK;
 }
 
+/* Last line of defence. The library refuses the same characters earlier, at COMMIT
+ * (will_text_has_at_hazard() in libs/simple_plc/services/plc_mqtt/plc_mqtt.c): keep the two in step. */
 bool st67_mqtt_will_text_ok(const char *text)
 {
     if (text == NULL) {
