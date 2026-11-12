@@ -199,7 +199,11 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
         return ST67_MQTT_ERR_TOO_LONG;
     }
     s_vendor_cfg.HostPort            = cfg->port;
-    s_vendor_cfg.Scheme              = (cfg->username[0] != '\0') ? 1U : 0U;
+    /* Plain TCP is scheme 0, user name and password included: they travel in AT+MQTTUSERCFG whatever the
+     * scheme. Scheme 1 is NOT "user/password" despite the comment in w6x_types.h: the module then opens
+     * TLS (verified on the wire: a TLS ClientHello arrived on port 1883), which a plain broker cannot
+     * answer. tls_attach() below sets 2 or 4 for TLS. */
+    s_vendor_cfg.Scheme              = 0U;
     s_vendor_cfg.KeepAlive           = cfg->keepalive_sec;
     s_vendor_cfg.DisableCleanSession = cfg->clean_session ? 0U : 1U;
     /* Last Will: the vendor sends WillTopic / WillMessage / WillQos / WillRetain in AT+MQTTCONNCFG. The
