@@ -50,5 +50,7 @@
 #define SPLC_MBW_ENABLE               1
 #define SPLC_REAL_ENABLE              1
 #define SPLC_WIFI_ENABLE              1
+/* Wi-Fi credentials survive a power cycle: stored by splc_wifi_store.c (one Flash sector). */
+#define SPLC_HOST_WIFI_PERSIST        1
 
 #endif /* SPLCOPTS_H */

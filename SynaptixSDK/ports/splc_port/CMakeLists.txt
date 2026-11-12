@@ -12,6 +12,7 @@
 add_library(meshwf_splc_port OBJECT
     splc_port.c
     splc_wifi_port.c
+    splc_wifi_store.c
     splc_rtc_port.c
 )
 
