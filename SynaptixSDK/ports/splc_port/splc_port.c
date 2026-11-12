@@ -1,6 +1,7 @@
 #include "splc_port.h"
 #include "splc_wifi_port.h"
 #include "splc_rtc_port.h"
+#include "splc_indicators_port.h"
 #include "sx_mqtt.h"
 #include "st67_modbus_tcp.h"   /* Modbus TCP slave over the ST67 sockets */
 
@@ -104,6 +105,7 @@ static void splc_task(void *arg)
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
     splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
+    splc_indicators_port_init();   /* 3 LEDs; the library closes its table at the first scan */
 
     /* Modbus TCP slave: second App-link transport next to USB. Must be called from this task,
      * after plc_engine_init() (plc_modbus_cfg is single-threaded). The two MBTCP tasks wait for
