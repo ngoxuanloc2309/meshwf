@@ -352,13 +352,18 @@ static int tls_chunk(void *ctx, uint8_t type, uint8_t index, const uint8_t *data
     (void)ctx;
     return st67_cert_store_chunk(type, index, data, len);
 }
-static int tls_commit(void *ctx, uint8_t type)
+static int tls_commit(void *ctx, uint8_t type, uint16_t crc16)
 {
     (void)ctx;
-    const int rc = st67_cert_store_commit(type);
+    /* crc16 = CRC-16/MODBUS of the bytes the library received; the store cross-checks it against
+     * what it wrote and returns ST67_CERT_ERR_CRC (STATUS 3) on a mismatch. */
+    const int rc = st67_cert_store_commit(type, crc16);
     if (rc == 0) {
-        log_info(TAG, "certificate type %u stored (active mask 0x%02X)", (unsigned)type,
-                 (unsigned)st67_cert_store_mask());
+        log_info(TAG, "certificate type %u stored (active mask 0x%02X, crc16 0x%04X)", (unsigned)type,
+                 (unsigned)st67_cert_store_mask(), (unsigned)crc16);
+    } else {
+        log_warn(TAG, "certificate type %u commit failed: %d (crc16 0x%04X)", (unsigned)type, rc,
+                 (unsigned)crc16);
     }
     return rc;
 }
@@ -378,6 +383,12 @@ static uint16_t tls_mask(void *ctx)
     (void)ctx;
     return st67_cert_store_mask();
 }
+/* 0x0F44..0x0F46: the store derives it from the verified Flash bytes (0 = type not stored). */
+static uint16_t tls_crc16(void *ctx, uint8_t type)
+{
+    (void)ctx;
+    return st67_cert_store_crc16(type);
+}
 #endif /* SPLC_MQTT_TLS_CERT_ENABLE */
 
 void sx_mqtt_init(void)
@@ -389,7 +400,7 @@ void sx_mqtt_init(void)
 #if SPLC_MQTT_TLS_CERT_ENABLE
     st67_cert_store_init();
     const splc_mqtt_tls_ops_t tls_ops = { NULL, tls_begin, tls_chunk, tls_commit, tls_abort,
-                                          tls_clear, tls_mask };
+                                          tls_clear, tls_mask, tls_crc16 };
     if (!splc_mqtt_tls_register(&tls_ops)) {
         log_error(TAG, "splc_mqtt_tls_register failed");
     }

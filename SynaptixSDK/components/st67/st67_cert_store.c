@@ -50,6 +50,7 @@ typedef struct {
     uint32_t off;      /* record offset inside the sector */
     uint32_t seq;
     uint16_t len;      /* PEM bytes without the NUL */
+    uint16_t crc16;    /* CRC-16/MODBUS of those len bytes (wire CRC, ICD MQTT-003), from Flash at rescan() */
 } live_t;
 
 static live_t   s_live[4];            /* index = type 1..3 */
@@ -170,15 +171,21 @@ static bool parse_header(const uint8_t h[HDR_SIZE], uint8_t *type, uint16_t *len
     return true;
 }
 
-/* CRC of the payload (PEM + NUL) of the record at `off`, read straight from Flash. */
-static uint16_t payload_crc(uint32_t off, uint16_t len)
+/* CRC of the payload (PEM + NUL) of the record at `off`, read straight from Flash. *wire_crc =
+ * CRC of the PEM bytes alone (the same pass: CRC-16 chains, the NUL is one more byte). */
+static uint16_t payload_crc(uint32_t off, uint16_t len, uint16_t *wire_crc)
 {
     const uint8_t *p = ST67_CERT_FLASH_PTR(ST67_CERT_BASE_ADDR + off + HDR_SIZE);
-    return crc16(0xFFFFU, p, (uint32_t)len + 1U);
+    const uint16_t wire = crc16(0xFFFFU, p, len);
+    if (wire_crc != NULL) {
+        *wire_crc = wire;
+    }
+    return crc16(wire, &p[len], 1U);
 }
 
-/* The trailer is present and matches the payload (PEM must also end with the NUL). */
-static bool record_complete(uint32_t off, uint16_t len)
+/* The trailer is present and matches the payload (PEM must also end with the NUL). On success
+ * *wire_crc (optional) = CRC-16 of the PEM bytes without the NUL. */
+static bool record_complete(uint32_t off, uint16_t len, uint16_t *wire_crc)
 {
     uint8_t t[TRL_SIZE];
     sx_flash_read(ST67_CERT_BASE_ADDR + off + HDR_SIZE + round16((uint32_t)len + 1U), t, TRL_SIZE);
@@ -186,7 +193,7 @@ static bool record_complete(uint32_t off, uint16_t len)
         return false;
     }
     const uint16_t c = (uint16_t)(t[4] | ((uint16_t)t[5] << 8));
-    if (payload_crc(off, len) != c) {
+    if (payload_crc(off, len, wire_crc) != c) {
         return false;
     }
     return *ST67_CERT_FLASH_PTR(ST67_CERT_BASE_ADDR + off + HDR_SIZE + len) == 0U;
@@ -220,11 +227,13 @@ static void rescan(void)
         if (seq > s_seq_max) {
             s_seq_max = seq;
         }
-        if (record_complete(off, len) && (!s_live[type].valid || seq > s_live[type].seq)) {
+        uint16_t wire = 0U;
+        if (record_complete(off, len, &wire) && (!s_live[type].valid || seq > s_live[type].seq)) {
             s_live[type].valid = true;
             s_live[type].off   = off;
             s_live[type].seq   = seq;
             s_live[type].len   = len;
+            s_live[type].crc16 = wire;
         }
         off += rec_size(len);                       /* complete or not, the length is known */
     }
@@ -433,10 +442,19 @@ int st67_cert_store_chunk(uint8_t type, uint8_t index, const uint8_t *data, uint
     return ST67_CERT_OK;
 }
 
-int st67_cert_store_commit(uint8_t type)
+int st67_cert_store_commit(uint8_t type, uint16_t expected_crc16)
 {
     if (!s_tx.open || type != s_tx.type || s_tx.written != s_tx.total) {
         return ST67_CERT_ERR_STATE;
+    }
+    /* s_tx.crc covers the bytes handed to chunk() so far (the NUL is not added yet): it must be
+     * the CRC the library computed on the wire. Checked BEFORE the trailer is written, so a
+     * mismatch leaves a dead record and the old certificate untouched. */
+    if (s_tx.crc != expected_crc16) {
+        log_error(TAG, "commit of type %u refused: stored bytes crc16 0x%04X, library crc16 0x%04X",
+                  (unsigned)type, (unsigned)s_tx.crc, (unsigned)expected_crc16);
+        tx_reset();
+        return ST67_CERT_ERR_CRC;
     }
 
     /* Last payload quad-word: the remaining bytes, the NUL, then 0xFF padding. */
@@ -469,8 +487,9 @@ int st67_cert_store_commit(uint8_t type)
         return ST67_CERT_ERR_STORAGE;
     }
     s_generation++;
-    log_info(TAG, "type %u stored: %u B at +0x%04lX seq %lu", (unsigned)ty,
-             (unsigned)s_live[ty].len, (unsigned long)rec_off, (unsigned long)s_live[ty].seq);
+    log_info(TAG, "type %u stored: %u B at +0x%04lX seq %lu crc16 0x%04X", (unsigned)ty,
+             (unsigned)s_live[ty].len, (unsigned long)rec_off, (unsigned long)s_live[ty].seq,
+             (unsigned)s_live[ty].crc16);
     return ST67_CERT_OK;
 }
 
@@ -523,6 +542,15 @@ uint16_t st67_cert_store_mask(void)
         }
     }
     return m;
+}
+
+uint16_t st67_cert_store_crc16(uint8_t type)
+{
+    ensure_init();
+    if (type < ST67_CERT_ROOT_CA || type > ST67_CERT_CLIENT_KEY || !s_live[type].valid) {
+        return 0U;
+    }
+    return s_live[type].crc16;
 }
 
 uint32_t st67_cert_store_generation(void)

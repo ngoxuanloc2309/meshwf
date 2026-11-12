@@ -22,6 +22,13 @@
  * sector is erased, they are written back). That path is not power-fail safe for the types
  * that are rewritten, and it drops the old copy of the type being replaced.
  *
+ * Wire CRC (ICD MQTT-003, registers 0x0F44..0x0F46): CRC-16/MODBUS over EXACTLY the bytes the
+ * App sent (total_cert_size, WITHOUT the NUL this store appends). It is never stored separately:
+ * rescan() recomputes it from the Flash bytes of every record whose trailer verified, so it
+ * cannot disagree with the stored certificate, survives power loss by construction, and is also
+ * known for records written by an older firmware. commit() cross-checks it against the CRC the
+ * library computed on the wire.
+ *
  * Capacity: the three live PEMs (+ 48 B of framing each, + NUL, rounded to 16 B) must fit in
  * 8 KB. A begin() that cannot fit returns ST67_CERT_ERR_OVERFLOW and changes nothing.
  *
@@ -52,6 +59,7 @@
 #define ST67_CERT_ERR_STORAGE    3    /* Flash/RAM failure */
 #define ST67_CERT_ERR_BUSY       4    /* a reader holds the store: retry later */
 #define ST67_CERT_ERR_STATE      5    /* call out of sequence / bad argument */
+#define ST67_CERT_ERR_CRC        6    /* the bytes stored differ from the ones the library checked (commit's crc16) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,8 +72,10 @@ void st67_cert_store_init(void);
 int  st67_cert_store_begin(uint8_t type, uint16_t total_size);
 /* The next chunk, in order (index starts at 0). */
 int  st67_cert_store_chunk(uint8_t type, uint8_t index, const uint8_t *data, uint8_t len);
-/* All bytes received: make the certificate live. On failure the old one stays live. */
-int  st67_cert_store_commit(uint8_t type);
+/* All bytes received: make the certificate live. `expected_crc16` = CRC-16/MODBUS of the received
+ * bytes as computed by the library; a mismatch with what this store accumulated returns
+ * ST67_CERT_ERR_CRC and nothing becomes live. On any failure the old certificate stays live. */
+int  st67_cert_store_commit(uint8_t type, uint16_t expected_crc16);
 /* Abandon the open transfer (no effect on the live certificates). */
 void st67_cert_store_abort(void);
 /* Erase every certificate (FACTORY_RESET). Postponed to service() while a reader holds it. */
@@ -75,6 +85,9 @@ void st67_cert_store_service(void);
 
 /* bit0 Root CA, bit1 client cert, bit2 client key: which certificates are live. */
 uint16_t st67_cert_store_mask(void);
+/* CRC-16/MODBUS of the live certificate of `type` (PEM bytes without the NUL), 0 when `type` is not
+ * live. Any task, no acquire() needed: it reads RAM only (computed from Flash by rescan()). */
+uint16_t st67_cert_store_crc16(uint8_t type);
 /* Incremented by every commit and clear: a changed value means a new TLS configuration. */
 uint32_t st67_cert_store_generation(void);
 
