@@ -15,8 +15,23 @@
 #include "st67w611_wifi_switch.h"
 #include "plc_wifi.h"
 #include "splc_log.h"
+#include "app_config.h"
 
 static const char *TAG = "SPLC_WIFI";
+
+/* Default network (app/app_config.h). Used ONLY while neither the App nor the Flash store has
+ * given any Wi-Fi configuration; it is never written to Flash (the library saves only a
+ * CONNECT that the App sent, and the default connect does not go through the library). */
+#ifndef WIFI_SSID_DEFAULT
+#define WIFI_SSID_DEFAULT       ""
+#endif
+#ifndef WIFI_PASSWORD_DEFAULT
+#define WIFI_PASSWORD_DEFAULT   ""
+#endif
+/* Pause between two default-connect attempts while the link is down. */
+#ifndef SPLC_HOST_WIFI_DEFAULT_RETRY_MS
+#define SPLC_HOST_WIFI_DEFAULT_RETRY_MS 30000U
+#endif
 
 /* Work for the ST67 task. Set by the engine-side callbacks / events, cleared by the worker. */
 #define CMD_CONNECT     0x01U
@@ -54,7 +69,17 @@ static uint8_t               s_ap_count;
 static uint16_t              s_scan_state = PLC_WIFI_SCAN_IDLE;
 static uint32_t              s_scan_deadline_ms;
 
+/* Default-network policy. s_load_done / s_stored come from the Flash load (engine task, once
+ * at boot); s_user_touched is set by ANY connect / disconnect / erase request from the App or
+ * the library (a stored auto-reconnect included): from then on the default is never used until
+ * the next reset. Plain flags written by the engine task, read by the worker. */
+static volatile bool         s_load_done;
+static volatile bool         s_stored;
+static volatile bool         s_user_touched;
+
 /* Worker-private (no lock needed). */
+static uint32_t              s_default_next_ms;   /* 0 = first attempt allowed at once */
+static bool                  s_default_logged;    /* the "why not" line is printed once */
 static uint32_t              s_ip_poll_until_ms;   /* 0 = not waiting for an IP */
 static uint32_t              s_ip_poll_next_ms;
 static uint32_t              s_mac_next_ms;
@@ -280,6 +305,7 @@ static void do_disconnect(void)
 static int op_connect(void *ctx, const splc_wifi_config_t *cfg)
 {
     (void)ctx;
+    s_user_touched = true;                     /* a real configuration exists: no default */
     if (!s_ready) {
         return PLC_WIFI_ERR_HW_NOT_READY;
     }
@@ -317,6 +343,7 @@ static int op_connect(void *ctx, const splc_wifi_config_t *cfg)
 static int op_disconnect(void *ctx)
 {
     (void)ctx;
+    s_user_touched = true;                     /* the App wants it off / forgotten */
     if (!s_ready) {
         return PLC_WIFI_ERR_HW_NOT_READY;
     }
@@ -388,7 +415,10 @@ static bool op_scan_ap(void *ctx, uint8_t index, splc_wifi_ap_t *out)
 static bool op_load(void *ctx, splc_wifi_config_t *out)
 {
     (void)ctx;
-    return meshwf_wifi_store_load(out);
+    const bool found = meshwf_wifi_store_load(out);
+    s_stored = found;
+    s_load_done = true;
+    return found;
 }
 
 static bool op_save(void *ctx, const splc_wifi_config_t *cfg)
@@ -400,6 +430,7 @@ static bool op_save(void *ctx, const splc_wifi_config_t *cfg)
 static void op_erase(void *ctx)
 {
     (void)ctx;
+    s_user_touched = true;                     /* FORGET / FACTORY_RESET: no default either */
     meshwf_wifi_store_erase();
 }
 #endif
@@ -429,6 +460,9 @@ void splc_wifi_port_init(void)
         return;
     }
 #if !SPLC_HOST_WIFI_PERSIST
+    s_load_done = true;                        /* nothing to load: the default may be used */
+#endif
+#if !SPLC_HOST_WIFI_PERSIST
     log_warn(TAG, "no Wi-Fi persistence: credentials are lost at power-off");
 #endif
 }
@@ -444,6 +478,79 @@ void splc_wifi_port_set_ready(bool ready)
     } else {
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_HW_NOT_READY, 0U);
     }
+}
+
+/* ---- default network ---------------------------------------------------------------- */
+
+static void default_connect(void)
+{
+    uint32_t gen;
+
+    taskENTER_CRITICAL();
+    memset(&s_cfg, 0, sizeof(s_cfg));
+    s_cfg.control_flags = PLC_WIFI_CTRL_ENABLE | PLC_WIFI_CTRL_DHCP;
+    strncpy(s_cfg.ssid, WIFI_SSID_DEFAULT, sizeof(s_cfg.ssid) - 1U);
+    strncpy(s_cfg.password, WIFI_PASSWORD_DEFAULT, sizeof(s_cfg.password) - 1U);
+    s_connecting = true;
+    s_gen++;
+    gen = s_gen;
+    taskEXIT_CRITICAL();
+
+    log_info(TAG, "no Wi-Fi configuration from the App or the Flash: connecting to the default \"%s\"",
+             WIFI_SSID_DEFAULT);
+    do_connect();
+
+    taskENTER_CRITICAL();
+    if (s_gen == gen) {
+        memset(s_cfg.password, 0, sizeof(s_cfg.password));   /* connect finished, nobody newer */
+    }
+    taskEXIT_CRITICAL();
+}
+
+/* Worker only. Decides, every pass, whether the default network may be joined. */
+static void default_service(uint32_t now)
+{
+    if (!s_ready || !s_load_done) {
+        return;                                /* wait for the module and for the Flash load */
+    }
+    if (s_stored || s_user_touched) {
+        if (!s_default_logged) {
+            s_default_logged = true;
+            log_debug(TAG, "default Wi-Fi not used (stored=%d, app_or_library_request=%d)",
+                      (int)s_stored, (int)s_user_touched);
+        }
+        return;
+    }
+    if (WIFI_SSID_DEFAULT[0] == '\0') {
+        return;                                /* no default compiled in */
+    }
+    if (strlen(WIFI_SSID_DEFAULT) > ST67_SWITCH_SSID_MAX_LEN ||
+        strlen(WIFI_PASSWORD_DEFAULT) > ST67_SWITCH_PASSWORD_MAX_LEN) {
+        if (!s_default_logged) {
+            s_default_logged = true;
+            log_warn(TAG, "default Wi-Fi refused: SSID > %u or password > %u characters",
+                     (unsigned)ST67_SWITCH_SSID_MAX_LEN, (unsigned)ST67_SWITCH_PASSWORD_MAX_LEN);
+        }
+        return;
+    }
+    if (s_cmd != 0U || s_connecting || s_scan_state == PLC_WIFI_SCAN_SCANNING) {
+        return;                                /* the App is busy with it */
+    }
+    if (s_default_next_ms != 0U && !time_reached(now, s_default_next_ms)) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    const uint16_t conn = s_live.conn;
+    taskEXIT_CRITICAL();
+    if (conn == PLC_WIFI_CONN_CONNECTING || conn == PLC_WIFI_CONN_CONNECTED ||
+        conn == PLC_WIFI_CONN_GOT_IP) {
+        return;                                /* already joined (or joining): leave it */
+    }
+
+    default_connect();
+    s_default_next_ms = now_ms() + SPLC_HOST_WIFI_DEFAULT_RETRY_MS;
+    if (s_default_next_ms == 0U) { s_default_next_ms = 1U; }
 }
 
 void splc_wifi_port_service(uint32_t wait_ms)
@@ -490,6 +597,8 @@ void splc_wifi_port_service(uint32_t wait_ms)
             refresh_link();
         }
     }
+
+    default_service(now);
 
     /* A scan whose end never arrives must not leave the App waiting forever. */
     if (s_scan_state == PLC_WIFI_SCAN_SCANNING && time_reached(now, s_scan_deadline_ms)) {

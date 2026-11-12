@@ -20,6 +20,11 @@ target_include_directories(meshwf_splc_port PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
+# app_config.h (default Wi-Fi network, default broker) lives in SynaptixSDK/app.
+target_include_directories(meshwf_splc_port PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../app
+)
+
 target_link_libraries(meshwf_splc_port PRIVATE
     splc
     st67w611_port
