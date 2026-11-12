@@ -12,6 +12,7 @@ add_library(sx_st67 STATIC
     st67_mqtt.c
     st67_cert_store.c
     st67_net_probe.c
+    st67_modbus_tcp.c
     ${ST67_VENDOR_DRV}/Core/w6x_mqtt.c
     ${ST67_VENDOR_DRV}/Driver/W61_at/w61_at_mqtt.c
 )
