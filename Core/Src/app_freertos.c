@@ -169,6 +169,7 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN defaultTask */
   /* Infinite loop */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, GPIO_PIN_SET);    
   for(;;)
   {
     osDelay(1);
