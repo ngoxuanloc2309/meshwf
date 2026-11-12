@@ -105,7 +105,7 @@ extern "C" {
 #define SYS_LOG_ENABLE                          1
 
 /** Debugging only: Enable/Disable AT log, i.e. logs the AT commands incoming/outcoming from/to the NCP */
-#define W61_AT_LOG_ENABLE                       1
+#define W61_AT_LOG_ENABLE                       0
 #include "logging.h"
 
 /** Enable/Disable Modem command log */
