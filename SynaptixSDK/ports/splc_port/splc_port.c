@@ -244,9 +244,17 @@ static void st67_diag_task(void *arg)
 }
 #endif /* SPLC_HOST_ST67_DIAG */
 
-/* Vendor driver log -> the host logger, debug level. Runs in the vendor OutputTask. */
+/* Vendor driver log -> the host logger, debug level. Runs in the vendor OutputTask.
+ * TEMPORARY diagnostic: the raw AT traffic ("AT> command" / "AT< reply", W61_AT_LOG_ENABLE 1) is
+ * raised to info so it is visible at SPLC_LOG_LEVEL 3. NOTE: this prints AT+MQTTUSERCFG and
+ * AT+CWJAP IN CLEAR TEXT, including the MQTT password and the Wi-Fi password. Revert to log_debug
+ * when done. */
 static void st67_vendor_log_out(const char *message)
 {
+    if (strncmp(message, "AT", 2) == 0) {
+        log_info(TAG, "vendor: %s", message);
+        return;
+    }
     log_debug(TAG, "vendor: %s", message);
 }
 
