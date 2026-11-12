@@ -1,10 +1,37 @@
-# components - chip-level drivers. Exposes one INTERFACE target: sx_components.
+# components/st67 - MQTT client of the ST67W611 module (vendor AT driver), see st67_mqtt.h.
 #
-#   st67  MQTT client of the ST67W611 module + TLS certificate store
-#   rtc   external RTC RX8130CE on I2C1 (decision 57); the SimplePLC hooks that use it
-#         live in ports/splc_port/splc_rtc_port.c
-add_subdirectory(st67)
-add_subdirectory(rtc)
+# The facade (libs/st67w611) is Wi-Fi only and does not build the vendor MQTT files, so
+# this component compiles them itself with the same include paths and ST67_ARCH as the facade.
+# ST67_ARCH arrives through the PUBLIC compile definition of the st67w611 target.
+#
+# st67_modbus_tcp.c is the Modbus TCP slave transport (see st67_modbus_tcp.h). The vendor socket
+# code (w6x_net.c) is already built by the facade, so nothing else is added for it.
+# st67_net_probe.c (TEMPORARY listener test) is no longer built: it opened port 5020 too.
+set(ST67_VENDOR_DRV "${ST67W611_VENDOR_DIR}/Middlewares/ST/ST67W6X_Network_Driver")
 
-add_library(sx_components INTERFACE)
-target_link_libraries(sx_components INTERFACE sx_st67 sx_rtc)
+add_library(sx_st67 STATIC
+    st67_mqtt.c
+    st67_cert_store.c
+    st67_modbus_tcp.c
+    ${ST67_VENDOR_DRV}/Core/w6x_mqtt.c
+    ${ST67_VENDOR_DRV}/Driver/W61_at/w61_at_mqtt.c
+)
+
+target_include_directories(sx_st67 PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+
+# Vendor headers stay private to this component (same list as libs/st67w611).
+target_include_directories(sx_st67 PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../libs/st67w611/inc
+    ${CMAKE_CURRENT_LIST_DIR}/../../libs/st67w611/port/include
+    ${ST67_VENDOR_DRV}/Api
+    ${ST67_VENDOR_DRV}/Core
+    ${ST67_VENDOR_DRV}/Core/Inc
+    ${ST67_VENDOR_DRV}/Driver/W61_at
+    ${ST67_VENDOR_DRV}/Driver/W61_bus
+    ${ST67_VENDOR_DRV}/Utils/Logging
+    ${ST67_VENDOR_DRV}/Utils/Misc
+)
+
+target_link_libraries(sx_st67 PUBLIC st67w611 splc PRIVATE stm32cubemx)
