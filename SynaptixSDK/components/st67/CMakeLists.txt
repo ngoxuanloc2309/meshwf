@@ -4,14 +4,14 @@
 # this component compiles them itself with the same include paths and ST67_ARCH as the facade.
 # ST67_ARCH arrives through the PUBLIC compile definition of the st67w611 target.
 #
-# st67_net_probe.c is a TEMPORARY TCP-listener test (see st67_net_probe.h). The vendor socket
+# st67_modbus_tcp.c is the Modbus TCP slave transport (see st67_modbus_tcp.h). The vendor socket
 # code (w6x_net.c) is already built by the facade, so nothing else is added for it.
+# st67_net_probe.c (TEMPORARY listener test) is no longer built: it opened port 5020 too.
 set(ST67_VENDOR_DRV "${ST67W611_VENDOR_DIR}/Middlewares/ST/ST67W6X_Network_Driver")
 
 add_library(sx_st67 STATIC
     st67_mqtt.c
     st67_cert_store.c
-    st67_net_probe.c
     st67_modbus_tcp.c
     ${ST67_VENDOR_DRV}/Core/w6x_mqtt.c
     ${ST67_VENDOR_DRV}/Driver/W61_at/w61_at_mqtt.c
