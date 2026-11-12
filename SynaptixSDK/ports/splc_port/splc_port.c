@@ -2,7 +2,7 @@
 #include "splc_wifi_port.h"
 #include "splc_rtc_port.h"
 #include "sx_mqtt.h"
-#include "st67_net_probe.h"   /* TEMPORARY TCP-listener test, see st67_net_probe.h */
+#include "st67_modbus_tcp.h"   /* Modbus TCP slave over the ST67 sockets */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -12,6 +12,7 @@
 #include "task.h"
 
 #include "plc_engine.h"
+#include "plc_modbus_cfg.h"
 #include "sx_adc.h"
 #include "splc_opt.h"
 #include "splc_log.h"
@@ -103,6 +104,20 @@ static void splc_task(void *arg)
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
     splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
+
+    /* Modbus TCP slave: second App-link transport next to USB. Must be called from this task,
+     * after plc_engine_init() (plc_modbus_cfg is single-threaded). The two MBTCP tasks wait for
+     * a Wi-Fi IP, so nothing happens on the network until the ST67 task has connected. */
+    {
+        modbus_transport_t tcp_tr;
+        if (!st67_modbus_tcp_create(&tcp_tr, splc_wifi_port_has_ip)) {
+            log_error(TAG, "Modbus TCP: create failed, TCP slave is off");
+        } else if (!plc_modbus_cfg_add_transport(&tcp_tr)) {
+            log_error(TAG, "Modbus TCP: plc_modbus_cfg_add_transport failed");
+        } else {
+            log_info(TAG, "Modbus TCP slave registered as App-link transport");
+        }
+    }
 
     for (;;) {
         plc_engine_poll();
@@ -327,8 +342,6 @@ static void wifi_task(void *arg)
         if (st == ST67W611_OK) {   /* MQTT client of the module: only after the bring-up */
             sx_mqtt_service((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
                             splc_wifi_port_has_ip());
-            st67_net_probe_service((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
-                                   splc_wifi_port_has_ip());
         }
 #if !SPLC_WIFI_ENABLE
         vTaskDelay(pdMS_TO_TICKS(250U));   /* the service call is a no-op without the Wi-Fi block */

@@ -53,4 +53,8 @@
 /* Wi-Fi credentials survive a power cycle: stored by splc_wifi_store.c (one Flash sector). */
 #define SPLC_HOST_WIFI_PERSIST        1
 
+/* App link transports served at once: slot 0 = USB-CDC (board), slot 1 = Modbus TCP slave over the
+ * ST67 module (components/st67/st67_modbus_tcp.c, registered in splc_task). */
+#define SPLC_MODBUS_MAX_TRANSPORTS    2
+
 #endif /* SPLCOPTS_H */
