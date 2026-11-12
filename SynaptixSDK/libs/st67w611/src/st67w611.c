@@ -139,11 +139,25 @@ static void vendor_net_callback(W6X_event_id_t event_id, void *event_args)
     (void)event_args;
 }
 
+/* The vendor calls APP_error_cb for EVERY failed AT command, with the name of the W6X_* function
+ * (__func__). A failed MQTT command (e.g. a broker that refuses the connection) says nothing about
+ * the Wi-Fi link: the caller already gets the status as the return value of W6X_MQTT_*. So these
+ * errors are only counted and remembered in the diagnostics; they do not move the module to
+ * ST67W611_STATE_ERROR and do not publish ST67W611_EVENT_ERROR (which the Wi-Fi glue turns into
+ * "link down" and which closes the Modbus TCP listener). Every other function behaves as before. */
+static int is_mqtt_function(const char *function_name)
+{
+    static const char prefix[] = "W6X_MQTT_";
+    return (function_name != NULL) && (strncmp(function_name, prefix, sizeof(prefix) - 1U) == 0);
+}
+
 static void vendor_error_callback(W6X_Status_t status, const char *function_name)
 {
-    (void)function_name;
     diagnostics.vendor_error_count++;
     diagnostics.last_error = map_status(status);
+    if (is_mqtt_function(function_name)) {
+        return;
+    }
     set_state(ST67W611_STATE_ERROR, diagnostics.last_error);
     publish(ST67W611_EVENT_ERROR, (void *)function_name);
 }

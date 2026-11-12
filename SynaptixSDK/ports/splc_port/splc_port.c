@@ -252,7 +252,7 @@ static void st67_diag_task(void *arg)
 static void st67_vendor_log_out(const char *message)
 {
     if (strncmp(message, "AT", 2) == 0) {
-        log_info(TAG, "vendor: %s", message);
+        log_debug(TAG, "vendor: %s", message);
         return;
     }
     log_debug(TAG, "vendor: %s", message);
