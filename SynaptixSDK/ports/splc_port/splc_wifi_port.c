@@ -143,7 +143,6 @@ bool splc_wifi_port_has_ip(void)
 
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
 {
-    (void)event_data;
     switch (event) {
     case ST67W611_EVENT_CONNECTING:
         live_set(PLC_WIFI_CONN_CONNECTING, 0U, 0U);
@@ -160,6 +159,11 @@ void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
         live_set(PLC_WIFI_CONN_DISCONNECTED, 0U, 0U);
         break;
     case ST67W611_EVENT_ERROR:
+        /* Diagnostic: event_data is the vendor function that failed (__func__, a string literal) when
+         * the error comes from the vendor error callback, NULL when the facade itself failed an
+         * operation. MQTT functions never get here (st67w611.c ignores them). */
+        log_warn(TAG, "driver error event from %s: Wi-Fi link marked down",
+                 (event_data != NULL) ? (const char *)event_data : "the facade (no vendor function)");
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_DRIVER, 0U);
         break;
     case ST67W611_EVENT_READY:
