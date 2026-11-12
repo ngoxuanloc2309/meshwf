@@ -107,7 +107,7 @@ void splc_indicators_port_init(void)
 
     static const splc_ind_proto_t wifi = {
         .name       = "wifi",
-        .pattern    = { .on_ms = 1000U, .off_ms = 1000U, .count = 1U, .pause_ms = 0U },   /* 1 flash / s */
+        .pattern    = { .on_ms = 1000U, .off_ms = 1000U, .count = 1U, .pause_ms = 2000U },   /* 1 flash / s */
         .get_state  = wifi_state,
         .ctx        = NULL,
         .depends_on = 0U,
