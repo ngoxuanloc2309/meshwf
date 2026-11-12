@@ -154,6 +154,29 @@ static bool convert_app(const splc_mqtt_broker_t *b, st67_mqtt_config_t *c)
     return true;
 }
 
+/* Last Will from the library -> module config. Applies to whichever broker is the target (the App's
+ * or the default one). A Will the AT command cannot carry is dropped with a warning and the session
+ * still comes up WITHOUT a Will: a broken Will must not keep the device offline. */
+static void apply_will(const splc_mqtt_broker_t *b, st67_mqtt_config_t *c)
+{
+    c->will_enabled = false;
+    if (!b->will_enabled) {
+        return;
+    }
+    if (!st67_mqtt_will_text_ok(b->will_topic) || !st67_mqtt_will_text_ok(b->will_payload) ||
+        strlen(b->will_topic) > ST67_MQTT_WILL_TOPIC_MAX || strlen(b->will_payload) > ST67_MQTT_WILL_PAYLOAD_MAX ||
+        b->will_qos > 2U) {
+        log_warn(TAG, "App Last Will cannot be sent (a '\"' or backslash in topic/payload, or bad QoS): "
+                      "connecting without a Last Will");
+        return;
+    }
+    c->will_enabled = true;
+    c->will_retain  = b->will_retain;
+    c->will_qos     = b->will_qos;
+    strcpy(c->will_topic, b->will_topic);
+    strcpy(c->will_payload, b->will_payload);
+}
+
 #if SPLC_MQTT_SUB_ENABLE
 /* ------------------------------------------------------------------------------------ */
 /* Receive queue: vendor callback context produces, engine task (pump) consumes.         */
@@ -410,6 +433,7 @@ void sx_mqtt_pump(uint32_t now_ms)
         if (!use_app) {
             fill_default(&cfg);
         }
+        apply_will(&b, &cfg);               /* the Will goes with either broker */
 #if SPLC_MQTT_TLS_CERT_ENABLE
         s_last_use_tls = cfg.use_tls;
 #endif
@@ -426,8 +450,9 @@ void sx_mqtt_pump(uint32_t now_ms)
         s_box.valid      = true;
         taskEXIT_CRITICAL();
 
-        log_info(TAG, "target broker %s:%u (%s%s), generation %u", cfg.host, (unsigned)cfg.port,
-                 use_app ? "from App" : "default", cfg.use_tls ? (cfg.use_mtls ? ", mTLS" : ", TLS") : "", (unsigned)gen);
+        log_info(TAG, "target broker %s:%u (%s%s%s), generation %u", cfg.host, (unsigned)cfg.port,
+                 use_app ? "from App" : "default", cfg.use_tls ? (cfg.use_mtls ? ", mTLS" : ", TLS") : "",
+                 cfg.will_enabled ? ", Last Will" : "", (unsigned)gen);
     }
 
 #if SPLC_MQTT_SUB_ENABLE

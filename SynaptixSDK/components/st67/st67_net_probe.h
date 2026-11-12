@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #ifndef ST67_NET_PROBE
-#define ST67_NET_PROBE        1      /* 0 = compiles to nothing */
+#define ST67_NET_PROBE        0      /* 0 = compiles to nothing (OFF: Modbus TCP slave owns port 5020) */
 #endif
 #ifndef ST67_NET_PROBE_PORT
 #define ST67_NET_PROBE_PORT   5020U

@@ -79,6 +79,20 @@ static st67_mqtt_status_t copy_str(uint8_t *dst, size_t dst_size, const char *sr
     return ST67_MQTT_OK;
 }
 
+bool st67_mqtt_will_text_ok(const char *text)
+{
+    if (text == NULL) {
+        return false;
+    }
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        const unsigned char c = (unsigned char)text[i];
+        if (c < 0x20U || c > 0x7EU || c == (unsigned char)'"' || c == (unsigned char)'\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
 #if SPLC_MQTT_TLS_CERT_ENABLE
 /* Names of the files the vendor writes into the module's file system (<= 31 chars). None is a
  * prefix of another: the vendor matches existing files with strncmp(name, listed, strlen(name)). */
@@ -174,7 +188,23 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     s_vendor_cfg.Scheme              = (cfg->username[0] != '\0') ? 1U : 0U;
     s_vendor_cfg.KeepAlive           = cfg->keepalive_sec;
     s_vendor_cfg.DisableCleanSession = cfg->clean_session ? 0U : 1U;
-    /* Last Will: left empty (decision: later). */
+    /* Last Will: the vendor sends WillTopic / WillMessage / WillQos / WillRetain in AT+MQTTCONNCFG. The
+     * memset above left them empty, which is "no Will". */
+    if (cfg->will_enabled) {
+        if (cfg->will_qos > 2U || cfg->will_topic[0] == '\0' ||
+            !st67_mqtt_will_text_ok(cfg->will_topic) || !st67_mqtt_will_text_ok(cfg->will_payload)) {
+            log_warn(TAG, "Last Will refused: empty topic, QoS > 2 or a character the AT command cannot carry");
+            return ST67_MQTT_ERR_ARG;
+        }
+        if (copy_str(s_vendor_cfg.WillTopic,   sizeof(s_vendor_cfg.WillTopic),   cfg->will_topic)   != ST67_MQTT_OK ||
+            copy_str(s_vendor_cfg.WillMessage, sizeof(s_vendor_cfg.WillMessage), cfg->will_payload) != ST67_MQTT_OK) {
+            return ST67_MQTT_ERR_TOO_LONG;
+        }
+        s_vendor_cfg.WillQos    = cfg->will_qos;
+        s_vendor_cfg.WillRetain = cfg->will_retain ? 1U : 0U;
+        log_info(TAG, "Last Will set: qos=%u retain=%d", (unsigned)cfg->will_qos, (int)cfg->will_retain);
+        log_debug(TAG, "Last Will topic=%s", cfg->will_topic);
+    }
 
     s_connected = false;
 #if SPLC_MQTT_TLS_CERT_ENABLE

@@ -33,6 +33,8 @@ extern "C" {
 #define ST67_MQTT_HOST_MAX   63U
 #define ST67_MQTT_CRED_MAX   31U
 #define ST67_MQTT_TOPIC_MAX  95U     /* longest topic accepted by subscribe / unsubscribe */
+#define ST67_MQTT_WILL_TOPIC_MAX    63U   /* vendor WillTopic[64] / WillMessage[64] */
+#define ST67_MQTT_WILL_PAYLOAD_MAX  63U
 
 typedef enum {
     ST67_MQTT_OK           =  0,
@@ -64,7 +66,22 @@ typedef struct {
      * The host name doubles as SNI. Username/password are still passed to the module. */
     bool     use_tls;
     bool     use_mtls;
+    /* Last Will (vendor WillTopic / WillMessage / WillQos / WillRetain). will_enabled = false: no Will
+     * is sent (the vendor strings stay empty). The vendor pastes both strings, UNESCAPED, between
+     * double quotes into the AT command, so a '"', a backslash, CR, LF or any non-printable
+     * character would corrupt it: st67_mqtt_will_text_ok() says which text can be sent, and
+     * st67_mqtt_connect() refuses (ST67_MQTT_ERR_ARG) a Will that fails it. The payload may be
+     * empty, the topic may not. */
+    bool     will_enabled;
+    bool     will_retain;
+    uint8_t  will_qos;                                         /* 0..2 */
+    char     will_topic[ST67_MQTT_WILL_TOPIC_MAX + 1U];
+    char     will_payload[ST67_MQTT_WILL_PAYLOAD_MAX + 1U];
 } st67_mqtt_config_t;
+
+/* true when `text` (NUL-terminated) is printable ASCII (0x20..0x7E) without '"' and '\\', i.e. it can
+ * go into the vendor's quoted AT parameter as it is. NULL is not ok. Any task. */
+bool st67_mqtt_will_text_ok(const char *text);
 
 /* Hook the facade event and give the vendor its receive buffer. Call after
  * st67w611_start() succeeded, and again after a module reset. */
