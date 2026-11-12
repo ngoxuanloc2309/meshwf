@@ -171,6 +171,41 @@ static bool text_has_at_hazard(const char *text)
     return false;
 }
 
+/* The module keeps its MQTT client across an MCU reset, so it can still hold the previous run's
+ * connection. Ask it, log what it holds, and drop a session that is still up (W6X_MQTT_Disconnect
+ * sends AT+MQTTCLEAN, only for the states 4, 5, 6). States 1..3 are reported and left alone.
+ * Uses s_vendor_cfg as scratch (st67_mqtt_connect clears it right after). Never logs credentials. */
+#define ST67_MQTT_STATE_UNREAD 0xFFFFFFFFUL
+
+static void drop_stale_session(void)
+{
+    memset(&s_vendor_cfg, 0, sizeof(s_vendor_cfg));
+    s_vendor_cfg.State = ST67_MQTT_STATE_UNREAD;
+    const W6X_Status_t q = W6X_MQTT_GetConnectionStatus(&s_vendor_cfg);
+    const uint32_t state = s_vendor_cfg.State;
+    if (state == ST67_MQTT_STATE_UNREAD) {
+        log_debug(TAG, "module MQTT state: not readable (vendor status %d)", (int)q);
+        return;
+    }
+    s_vendor_cfg.HostName[sizeof(s_vendor_cfg.HostName) - 1U] = 0U;
+    if (state == (uint32_t)W6X_MQTT_STATE_UNINIT) {
+        log_debug(TAG, "module MQTT state %u (nothing to clean)", (unsigned)state);
+        return;
+    }
+    log_info(TAG, "module MQTT state before connect: %u, host \"%s\" port %u",
+             (unsigned)state, (const char *)s_vendor_cfg.HostName, (unsigned)s_vendor_cfg.HostPort);
+    if (state == (uint32_t)W6X_MQTT_STATE_CONNECTED ||
+        state == (uint32_t)W6X_MQTT_STATE_CONNECTED_NO_SUB ||
+        state == (uint32_t)W6X_MQTT_STATE_CONNECTED_SUBSCRIBED) {
+        const W6X_Status_t d = W6X_MQTT_Disconnect();
+        s_connected = false;
+        log_info(TAG, "stale MQTT session found in the module and dropped (vendor status %d)", (int)d);
+    } else {
+        log_warn(TAG, "module MQTT state %u is not one the vendor can clean: connecting anyway",
+                 (unsigned)state);
+    }
+}
+
 st67_mqtt_status_t st67_mqtt_init(void)
 {
     s_connected = false;
@@ -193,6 +228,7 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
         return ST67_MQTT_ERR_NOT_INIT;
     }
 
+    drop_stale_session();                /* leftovers of an earlier run, before anything is configured */
     memset(&s_vendor_cfg, 0, sizeof(s_vendor_cfg));
     if (copy_str(s_vendor_cfg.HostName,   sizeof(s_vendor_cfg.HostName),   cfg->host)      != ST67_MQTT_OK ||
         copy_str(s_vendor_cfg.MQClientId, sizeof(s_vendor_cfg.MQClientId), cfg->client_id) != ST67_MQTT_OK ||
@@ -265,6 +301,8 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     if (conn != W6X_STATUS_OK) {
         log_warn(TAG, "W6X_MQTT_Connect failed: vendor status %d (TCP/TLS to %s:%u or the broker's CONNACK "
                       "was refused)", (int)conn, cfg->host, (unsigned)cfg->port);
+        (void)W6X_MQTT_Disconnect();     /* no half-open client left for the next attempt */
+        s_connected = false;
         return ST67_MQTT_ERR_VENDOR;
     }
     log_debug(TAG, "W6X_MQTT_Connect accepted, waiting for the CONNECTED event (timeout %lu ms)",
@@ -413,6 +451,21 @@ uint32_t st67_mqtt_rx_malformed(void)
 bool st67_mqtt_is_connected(void)
 {
     return s_connected;
+}
+
+st67_mqtt_status_t st67_mqtt_recover_module(void)
+{
+    const st67w611_status_t r = st67w611_soft_reset();
+    if (r == ST67W611_ERR_BUSY) {
+        log_warn(TAG, "module restart refused: the driver is busy, nothing changed");
+        return ST67_MQTT_ERR_BUSY;
+    }
+    if (r != ST67W611_OK) {
+        log_warn(TAG, "module restart failed: %s", st67w611_status_string(r));
+        return ST67_MQTT_ERR_VENDOR;
+    }
+    log_info(TAG, "module restarted (soft reset): the Wi-Fi link has to come back");
+    return ST67_MQTT_OK;
 }
 
 void st67_mqtt_on_module_reset(void)

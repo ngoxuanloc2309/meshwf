@@ -43,8 +43,10 @@ typedef enum {
     ST67_MQTT_ERR_NOT_INIT = -3,   /* st67_mqtt_init() did not succeed yet */
     ST67_MQTT_ERR_VENDOR   = -4,   /* the module / vendor driver refused the command */
     ST67_MQTT_ERR_TIMEOUT  = -5,   /* no CONNECTED event in time */
-    ST67_MQTT_ERR_CERT     = -6    /* use_tls but the certificate set is missing / inconsistent /
+    ST67_MQTT_ERR_CERT     = -6,   /* use_tls but the certificate set is missing / inconsistent /
                                     * temporarily unreadable (reason logged) */
+    ST67_MQTT_ERR_BUSY     = -7    /* st67_mqtt_recover_module(): the facade is busy (scan or another
+                                    * operation); nothing was done, try again later */
 } st67_mqtt_status_t;
 
 typedef struct {
@@ -91,6 +93,15 @@ st67_mqtt_status_t st67_mqtt_init(void);
  * (then it disconnects again). The caller must have an IP address. */
 st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t timeout_ms);
 st67_mqtt_status_t st67_mqtt_disconnect(void);
+
+/* Soft-reset the module (AT+RST through the facade) to get rid of MQTT state it may still hold from
+ * an earlier session. HEAVY: the Wi-Fi link, every socket (Modbus TCP) and the MQTT session are lost
+ * for several seconds. sx_mqtt uses it once after repeated connect failures, never routinely.
+ * The facade's lifecycle hook marks the session as gone. ST67 task only, blocking.
+ *   ST67_MQTT_OK       the module restarted;
+ *   ST67_MQTT_ERR_BUSY the facade is busy: nothing changed;
+ *   ST67_MQTT_ERR_VENDOR any other failure (the facade may be in ERROR now; reason logged). */
+st67_mqtt_status_t st67_mqtt_recover_module(void);
 
 /* Delete the three TLS files (splc_ca.pem, splc_cert.pem, splc_key.pem) the vendor wrote into the
  * module's file system when it connected with TLS; the private key stays there otherwise.

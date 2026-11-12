@@ -81,6 +81,7 @@ static uint32_t              s_scan_deadline_ms;
 static volatile bool         s_load_done;
 static volatile bool         s_stored;
 static volatile bool         s_user_touched;
+static volatile bool         s_rejoin_pending;    /* the module restarted: rejoin the App's network */
 
 /* Worker-private (no lock needed). */
 static uint32_t              s_link_next_ms;      /* next idle link check, 0 = at once */
@@ -167,6 +168,14 @@ void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_DRIVER, 0U);
         break;
     case ST67W611_EVENT_READY:
+        /* After the bring-up, READY means the module restarted (soft reset): the AP link is gone.
+         * The default network comes back through default_service(); a network from the App or the
+         * Flash is rejoined by the worker (rejoin_after_module_restart). Flag only. */
+        if (s_ready) {
+            s_rejoin_pending = true;
+            post(CMD_REFRESH);
+        }
+        break;
     default:
         break;
     }
@@ -568,6 +577,33 @@ static void default_connect(void)
     taskEXIT_CRITICAL();
 }
 
+/* Worker only. The module restarted and dropped the AP link. A network set by the App or restored
+ * from the Flash is NOT rejoined by default_service(), so do it here from s_cfg (the password stays
+ * there after op_connect). Nothing to do when the link is up or joining, a connect is already
+ * running, Wi-Fi is disabled or no SSID is known. */
+static void rejoin_after_module_restart(void)
+{
+    if (!s_stored && !s_user_touched) {
+        return;                                /* default network: default_service() does it */
+    }
+    bool go = false;
+    taskENTER_CRITICAL();
+    const uint16_t conn = s_live.conn;
+    if (!s_connecting && s_cfg.ssid[0] != '\0' && (s_cfg.control_flags & PLC_WIFI_CTRL_ENABLE) != 0U &&
+        conn != PLC_WIFI_CONN_CONNECTED && conn != PLC_WIFI_CONN_GOT_IP &&
+        conn != PLC_WIFI_CONN_CONNECTING) {
+        s_connecting = true;
+        s_gen++;
+        go = true;
+    }
+    taskEXIT_CRITICAL();
+    if (!go) {
+        return;
+    }
+    log_info(TAG, "module restarted: rejoining the configured Wi-Fi network");
+    do_connect();                              /* clears s_connecting when it finishes */
+}
+
 /* Worker only. Decides, every pass, whether the default network may be joined. */
 static void default_service(uint32_t now)
 {
@@ -659,6 +695,10 @@ void splc_wifi_port_service(uint32_t wait_ms)
         }
     }
 
+    if (s_rejoin_pending) {
+        s_rejoin_pending = false;
+        rejoin_after_module_restart();
+    }
     default_service(now);
 
     /* Idle: re-read the link now and then so a dropped link shows up in the log. */

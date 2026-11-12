@@ -498,6 +498,18 @@ static uint32_t s_next_try_ms;
 static bool     s_hello_pending;
 static volatile bool s_module_reset;
 
+/* Last-resort recovery. The module keeps its MQTT client across an MCU reset; if connecting keeps
+ * failing, ONE soft reset of the module clears what it still holds. It is HEAVY (Wi-Fi, Modbus TCP
+ * and MQTT drop for several seconds), so it is armed once: after it ran it arms again only when an
+ * MQTT connection succeeded. An unreachable broker therefore costs ONE reset, not one per retry.
+ * Only module failures (vendor error / timeout) count, not a refused configuration or certificate. */
+#ifndef SX_MQTT_RECOVER_AFTER_FAILS
+#define SX_MQTT_RECOVER_AFTER_FAILS 3U
+#endif
+static uint8_t  s_fail_streak;
+static uint32_t s_streak_seq;
+static bool     s_recover_armed = true;
+
 void sx_mqtt_notify_module_reset(void)
 {
     s_module_reset = true;
@@ -630,6 +642,21 @@ static bool box_snapshot(box_t *out)
     return out->valid;
 }
 
+/* ST67 task, right after a failed attempt. */
+static void maybe_recover_module(void)
+{
+    if (!s_recover_armed || s_fail_streak < SX_MQTT_RECOVER_AFTER_FAILS) {
+        return;
+    }
+    log_warn(TAG, "%u connect failures in a row: restarting the module once (Wi-Fi and Modbus TCP "
+                  "drop for a few seconds)", (unsigned)s_fail_streak);
+    if (st67_mqtt_recover_module() == ST67_MQTT_ERR_BUSY) {
+        return;                          /* nothing happened: still armed */
+    }
+    s_recover_armed = false;             /* ran (or failed): not again until a connection succeeds */
+    s_fail_streak   = 0U;
+}
+
 static void try_connect(uint32_t now_ms)
 {
     static box_t box;                    /* ~0.2 KB, keep it off the 4 KB ST67 stack */
@@ -637,15 +664,25 @@ static void try_connect(uint32_t now_ms)
         return;                          /* the engine task has not delivered a target yet */
     }
     s_try_seq = box.seq;
+    if (box.seq != s_streak_seq) {       /* a new target: failures of the old one do not count */
+        s_streak_seq  = box.seq;
+        s_fail_streak = 0U;
+    }
     log_info(TAG, "connecting to %s:%u (%s%s)", box.cfg.host, (unsigned)box.cfg.port,
              box.from_app ? "App" : "default", box.cfg.use_tls ? (box.cfg.use_mtls ? ", mTLS" : ", TLS") : "");
 
     const st67_mqtt_status_t r = st67_mqtt_connect(&box.cfg, SX_MQTT_CONNECT_TIMEOUT_MS);
     if (r != ST67_MQTT_OK) {
+        if ((r == ST67_MQTT_ERR_VENDOR || r == ST67_MQTT_ERR_TIMEOUT) && s_fail_streak < 255U) {
+            s_fail_streak++;
+        }
         go_down(now_ms, (r == ST67_MQTT_ERR_TIMEOUT) ? 4U /* TIMEOUT */
                                                      : 2U /* TCP_RESET: vendor gives no detail */, true);
+        maybe_recover_module();
         return;
     }
+    s_fail_streak     = 0U;
+    s_recover_armed   = true;            /* it worked: a later failure series may use the recovery again */
     s_conn_seq        = box.seq;
     s_conn_generation = box.generation;
     s_conn_tls        = box.cfg.use_tls;
