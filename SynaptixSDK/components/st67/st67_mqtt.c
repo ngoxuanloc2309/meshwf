@@ -188,8 +188,8 @@ static void drop_stale_session(void)
         return;
     }
     s_vendor_cfg.HostName[sizeof(s_vendor_cfg.HostName) - 1U] = 0U;
-    if (state == (uint32_t)W6X_MQTT_STATE_UNINIT) {
-        log_debug(TAG, "module MQTT state %u (nothing to clean)", (unsigned)state);
+    if (state == (uint32_t)W6X_MQTT_STATE_UNINIT || state == (uint32_t)W6X_MQTT_STATE_DISCONNECTED) {
+        log_debug(TAG, "module MQTT state %u (no session, nothing to clean)", (unsigned)state);
         return;
     }
     log_info(TAG, "module MQTT state before connect: %u, host \"%s\" port %u",
