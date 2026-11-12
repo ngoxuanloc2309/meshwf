@@ -80,6 +80,16 @@ void splc_wifi_port_service(uint32_t wait_ms);
  * events and the ST67 task keep, never calls the facade. */
 bool splc_wifi_port_has_ip(void);
 
+/* Any task, non-blocking (reads the same cache as has_ip). Link state for the connection
+ * indicator, as an SPLC_LINK_STATE value (plc_indicator_err_define.h):
+ *   2 CONNECTED   IP address obtained
+ *   1 CONNECTING  module starting, joining, associated without IP, or no error and not yet joined
+ *   3 FAILED      a driver / join error is latched, or the App / Flash configured a network and
+ *                 the link is down with no connect running (link lost, or Wi-Fi switched off by
+ *                 the App: the two cannot be told apart here)
+ *   0 DISABLED    only without SPLC_WIFI_ENABLE */
+int splc_wifi_port_link_state(void);
+
 /* Facade event hook (st67w611_config_t.event_cb). Vendor callback context: it only copies
  * a few values and wakes the ST67 task. Safe to call before splc_wifi_port_init(). */
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data);
@@ -101,6 +111,7 @@ static inline void splc_wifi_port_init(void) {}
 static inline void splc_wifi_port_set_ready(bool ready) { (void)ready; }
 static inline void splc_wifi_port_service(uint32_t wait_ms) { (void)wait_ms; }
 static inline bool splc_wifi_port_has_ip(void) { return false; }
+static inline int  splc_wifi_port_link_state(void) { return 0; }
 static inline void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
 { (void)event; (void)event_data; }
 

@@ -140,6 +140,34 @@ bool splc_wifi_port_has_ip(void)
     return up;
 }
 
+int splc_wifi_port_link_state(void)
+{
+    taskENTER_CRITICAL();
+    const uint16_t conn = s_live.conn;
+    const uint16_t err  = s_live.err;
+    const bool connecting = s_connecting;
+    const bool ready      = s_ready;
+    const bool touched    = s_user_touched || s_stored;
+    taskEXIT_CRITICAL();
+
+    switch (conn) {
+    case PLC_WIFI_CONN_GOT_IP:
+        return 2;                                  /* SPLC_LINK_STATE_CONNECTED  */
+    case PLC_WIFI_CONN_CONNECTING:
+    case PLC_WIFI_CONN_CONNECTED:
+        return 1;                                  /* SPLC_LINK_STATE_CONNECTING */
+    default:
+        break;
+    }
+    if (err != 0U) {
+        return 3;                                  /* SPLC_LINK_STATE_FAILED     */
+    }
+    if (!ready || connecting || !touched) {
+        return 1;                                  /* bring-up, a connect running, or the default join to come */
+    }
+    return 3;
+}
+
 /* ---- facade events (vendor callback context) ---------------------------------------- */
 
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)

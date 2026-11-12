@@ -762,6 +762,11 @@ static void module_wipe_service(uint32_t now_ms)
 }
 #endif
 
+bool sx_mqtt_has_error(void)
+{
+    return s_last_error != 0U;
+}
+
 void sx_mqtt_service(uint32_t now_ms, bool link_up)
 {
     if (s_module_reset) {                /* the module restarted: the session is gone */

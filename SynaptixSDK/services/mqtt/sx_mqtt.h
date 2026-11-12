@@ -78,6 +78,11 @@ void sx_mqtt_pump(uint32_t now_ms);
  * May block for several seconds while connecting (AT commands over SPI). */
 void sx_mqtt_service(uint32_t now_ms, bool link_up);
 
+/* Any task, non-blocking. true while the last connect attempt failed and no session is up
+ * (the indicator shows FAILED); false while connecting for the first time, connected, or when
+ * the cause is a missing IP. */
+bool sx_mqtt_has_error(void);
+
 /* Facade lifecycle hook (module reset): only sets a flag. */
 void sx_mqtt_notify_module_reset(void);
 
@@ -90,6 +95,7 @@ void sx_mqtt_notify_module_reset(void);
 static inline void sx_mqtt_init(void) {}
 static inline void sx_mqtt_pump(uint32_t now_ms) { (void)now_ms; }
 static inline void sx_mqtt_service(uint32_t now_ms, bool link_up) { (void)now_ms; (void)link_up; }
+static inline bool sx_mqtt_has_error(void) { return false; }
 static inline void sx_mqtt_notify_module_reset(void) {}
 
 #endif /* SPLC_MQTT_ENABLE */

@@ -31,7 +31,7 @@
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 1
 
 /* Logging (LPUART1) */
-#define SPLC_LOG_LEVEL                3
+#define SPLC_LOG_LEVEL                4
 
 /* Clock: external RTC IC on I2C1 (decision 57). The hooks are registered by
  * the product glue (ports/splc_port) before plc_engine_init(). */
@@ -50,6 +50,8 @@
 #define SPLC_MBW_ENABLE               1
 #define SPLC_REAL_ENABLE              1
 #define SPLC_WIFI_ENABLE              1
+/* Connection indicator: LEDs POWER PC15 / STATUS PC14 / LINK PC13 (splc_indicators_port.c). */
+#define SPLC_INDICATOR_ENABLE         1
 /* Wi-Fi credentials survive a power cycle: stored by splc_wifi_store.c (one Flash sector). */
 #define SPLC_HOST_WIFI_PERSIST        1
 
