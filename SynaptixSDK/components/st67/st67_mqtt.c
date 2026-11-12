@@ -155,6 +155,20 @@ static void tls_detach(W6X_MQTT_Connect_t *v)
 }
 #endif /* SPLC_MQTT_TLS_CERT_ENABLE */
 
+/* Diagnostic only (nothing is refused here): the vendor pastes these strings, UNESCAPED, between
+ * double quotes into AT+MQTTUSERCFG, so a '"' or a backslash, CR, LF or any non-printable
+ * character in the client id / user name / password can make the module answer ERROR. */
+static bool text_has_at_hazard(const char *text)
+{
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        const unsigned char c = (unsigned char)text[i];
+        if (c < 0x20U || c > 0x7EU || c == (unsigned char)'"' || c == (unsigned char)'\\') {
+            return true;
+        }
+    }
+    return false;
+}
+
 st67_mqtt_status_t st67_mqtt_init(void)
 {
     s_connected = false;
@@ -220,6 +234,15 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
         return ST67_MQTT_ERR_CERT;
     }
 #endif
+    /* One line per attempt: what is about to be sent (never the password itself). */
+    log_info(TAG, "connect: scheme=%u keepalive=%u clean=%d client_id=\"%s\" user_len=%u pass_len=%u",
+             (unsigned)s_vendor_cfg.Scheme, (unsigned)cfg->keepalive_sec, (int)cfg->clean_session,
+             cfg->client_id, (unsigned)strlen(cfg->username), (unsigned)strlen(cfg->password));
+    if (text_has_at_hazard(cfg->client_id) || text_has_at_hazard(cfg->username) ||
+        text_has_at_hazard(cfg->password)) {
+        log_warn(TAG, "client id / user name / password has a '\"', a backslash or a non-printable character: "
+                      "the AT command may be rejected by the module");
+    }
     const W6X_Status_t conf = W6X_MQTT_Configure(&s_vendor_cfg);
 #if SPLC_MQTT_TLS_CERT_ENABLE
     if (cfg->use_tls) {
@@ -227,17 +250,26 @@ st67_mqtt_status_t st67_mqtt_connect(const st67_mqtt_config_t *cfg, uint32_t tim
     }
 #endif
     if (conf != W6X_STATUS_OK) {
+        /* W6X_Status_t: 1 BUSY, 2 ERROR, 3 TIMEOUT, 4 UNEXPECTED_RESPONSE, 5 NOT_SUPPORTED, 6 UNKNOWN */
+        log_warn(TAG, "W6X_MQTT_Configure failed: vendor status %d (the module refused the MQTT user/broker "
+                      "configuration)", (int)conf);
         return ST67_MQTT_ERR_VENDOR;
     }
-    if (W6X_MQTT_Connect(&s_vendor_cfg) != W6X_STATUS_OK) {
+    const W6X_Status_t conn = W6X_MQTT_Connect(&s_vendor_cfg);
+    if (conn != W6X_STATUS_OK) {
+        log_warn(TAG, "W6X_MQTT_Connect failed: vendor status %d (TCP/TLS to %s:%u or the broker's CONNACK "
+                      "was refused)", (int)conn, cfg->host, (unsigned)cfg->port);
         return ST67_MQTT_ERR_VENDOR;
     }
+    log_debug(TAG, "W6X_MQTT_Connect accepted, waiting for the CONNECTED event (timeout %lu ms)",
+              (unsigned long)timeout_ms);
 
     const TickType_t start = xTaskGetTickCount();
     while (!s_connected) {
         if ((TickType_t)(xTaskGetTickCount() - start) >= pdMS_TO_TICKS(timeout_ms)) {
             (void)W6X_MQTT_Disconnect();
             s_connected = false;
+            log_warn(TAG, "no CONNECTED event within %lu ms", (unsigned long)timeout_ms);
             return ST67_MQTT_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(20U));
