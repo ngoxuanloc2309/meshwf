@@ -2,6 +2,7 @@
 #include "splc_wifi_port.h"
 #include "splc_rtc_port.h"
 #include "splc_indicators_port.h"
+#include "splc_boot_button_port.h"   /* PA0 held 7 s -> system bootloader (DFU) */
 #include "sx_mqtt.h"
 #include "st67_modbus_tcp.h"   /* Modbus TCP slave over the ST67 sockets */
 
@@ -171,6 +172,7 @@ static void splc_task(void *arg)
     for (;;) {
         plc_engine_poll();
         sx_mqtt_pump((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+        splc_boot_button_poll((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
         vTaskDelay(pdMS_TO_TICKS(1U));
     }
 }
