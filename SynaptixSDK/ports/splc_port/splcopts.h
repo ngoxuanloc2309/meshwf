@@ -59,4 +59,6 @@
  * ST67 module (components/st67/st67_modbus_tcp.c, registered in splc_task). */
 #define SPLC_MODBUS_MAX_TRANSPORTS    2
 
+#define SPLC_SYSTAG_ENABLE            0
+
 #endif /* SPLCOPTS_H */
