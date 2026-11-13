@@ -28,7 +28,7 @@ extern "C" {
 #define SPLC_HOST_TASK_STACK_WORDS   1536U   /* 6 KB; measure with the stack high-water mark */
 #endif
 #ifndef SPLC_HOST_TASK_PRIO
-#define SPLC_HOST_TASK_PRIO          5U
+#define SPLC_HOST_TASK_PRIO          6U
 #endif
 
 /* Wi-Fi task: ST67 bring-up (init + start), then the worker of splc_wifi_port.c
@@ -40,7 +40,7 @@ extern "C" {
 #define SPLC_HOST_WIFI_STACK_WORDS   1024U   /* 4 KB; vendor calls run on this stack */
 #endif
 #ifndef SPLC_HOST_WIFI_PRIO
-#define SPLC_HOST_WIFI_PRIO          6U      /* below the engine task */
+#define SPLC_HOST_WIFI_PRIO          5U      /* below the engine task */
 #endif
 
 /* Bring-up aid: log FreeRTOS heap (free / minimum ever) and the Wi-Fi task's stack
