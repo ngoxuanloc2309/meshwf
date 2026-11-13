@@ -136,6 +136,14 @@ uint32_t st67_mqtt_rx_malformed(void);
 /* Last connection state from the module events. Any task. */
 bool st67_mqtt_is_connected(void);
 
+/* Ask the MODULE whether its MQTT session is still up (AT query: uses the AT channel, so call it
+ * from the ST67 task like every other function here). *connected = true when the module reports
+ * one of the three CONNECTED states; *state_out (may be NULL) = the raw vendor state.
+ * Returns ST67_MQTT_OK when the state could be read; any other status means "unknown": do NOT
+ * treat it as a lost session. Unlike st67_mqtt_is_connected() this does not rely on a DISCONNECTED
+ * event having reached the host. */
+st67_mqtt_status_t st67_mqtt_query_session(bool *connected, uint32_t *state_out);
+
 /* The facade reports a module reset: the session is gone and the vendor MQTT object must
  * be initialised again. Only sets flags (safe from a lifecycle hook); the next
  * st67_mqtt_init() clears them. */

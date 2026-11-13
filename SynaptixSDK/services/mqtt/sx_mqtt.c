@@ -494,6 +494,15 @@ static state_t  s_state = S_IDLE;
 static uint32_t s_conn_seq;
 static uint32_t s_try_seq;             /* box.seq of the last connection attempt */
 static uint32_t s_backoff_ms = SX_MQTT_BACKOFF_MIN_MS;
+
+/* While connected, ask the module every SX_MQTT_SESSION_CHECK_MS whether its MQTT session is
+ * still up. The host otherwise learns of a lost session only from a DISCONNECTED event; when the
+ * module drops it silently, publishes keep returning OK and nothing reaches the broker.
+ * 0 = no check (old behaviour). */
+#ifndef SX_MQTT_SESSION_CHECK_MS
+#define SX_MQTT_SESSION_CHECK_MS 5000U
+#endif
+static uint32_t s_next_check_ms;
 static uint32_t s_next_try_ms;
 static bool     s_hello_pending;
 static volatile bool s_module_reset;
@@ -689,6 +698,7 @@ static void try_connect(uint32_t now_ms)
     s_conn_valid      = true;
     s_last_error      = 0U;
     s_state           = S_CONNECTED;
+    s_next_check_ms   = now_ms + SX_MQTT_SESSION_CHECK_MS;
     s_backoff_ms      = SX_MQTT_BACKOFF_MIN_MS;
     s_hello_pending   = (SX_MQTT_HELLO_ON_DEFAULT != 0) && !box.from_app;
     queue_clear();
@@ -714,7 +724,16 @@ static void send_one(void)
     }
 
     const msg_t *m = &s_q[s_q_tail];     /* not overwritten: the producer sees the slot as used */
+    /* DIAG (temporary): if the module path blocks, "publish begin" is the last line printed. */
+    const uint32_t pub_t0 = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    log_debug(TAG, "publish begin t=%u len=%u", (unsigned)pub_t0, (unsigned)m->len);
     const st67_mqtt_status_t r = st67_mqtt_publish(m->topic, m->payload, m->len, m->qos, m->retain);
+    const uint32_t pub_dt = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS) - pub_t0;
+    if (pub_dt > 500U) {
+        log_warn(TAG, "publish slow: %u ms (status %d)", (unsigned)pub_dt, (int)r);
+    } else {
+        log_debug(TAG, "publish end %u ms (status %d)", (unsigned)pub_dt, (int)r);
+    }
     if (r != ST67_MQTT_OK) {
         log_warn(TAG, "publish failed (%d): message dropped", (int)r);
     }
@@ -829,6 +848,22 @@ void sx_mqtt_service(uint32_t now_ms, bool link_up)
             s_backoff_ms = SX_MQTT_BACKOFF_MIN_MS;
             break;
         }
+#if SX_MQTT_SESSION_CHECK_MS != 0U
+        if ((int32_t)(now_ms - s_next_check_ms) >= 0) {
+            s_next_check_ms = now_ms + SX_MQTT_SESSION_CHECK_MS;
+            bool     alive = true;
+            uint32_t mod_state = 0U;
+            if (st67_mqtt_query_session(&alive, &mod_state) == ST67_MQTT_OK) {
+                if (!alive) {
+                    log_warn(TAG, "module reports no MQTT session (state %u) but no DISCONNECTED event "
+                                  "arrived: marking MQTT down", (unsigned)mod_state);
+                    go_down(now_ms, 2U, true);
+                    break;
+                }
+                log_debug(TAG, "session check: module state %u (connected)", (unsigned)mod_state);
+            }
+        }
+#endif
 #if SPLC_MQTT_SUB_ENABLE
         sub_apply(now_ms);
 #endif

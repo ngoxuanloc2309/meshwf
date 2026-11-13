@@ -156,7 +156,11 @@ static bool serve_frame(client_t *c, uint16_t adu)
     }
 
     const uint16_t rlen = s_rsp_len;
+    const uint32_t sd_t0 = now_ms();
     const ssize_t sent = W6X_Net_Send(c->sock, s_rsp, rlen, 0);
+    if ((now_ms() - sd_t0) > 400U) {
+        log_warn(TAG, "W6X_Net_Send slow: %u ms", (unsigned)(now_ms() - sd_t0));
+    }
     x_set(X_IDLE);
     if (sent != (ssize_t)rlen) {
         log_warn(TAG, "send failed (%d of %u bytes)", (int)sent, (unsigned)rlen);
@@ -169,6 +173,8 @@ static bool serve_frame(client_t *c, uint16_t adu)
     return true;
 }
 
+static uint8_t s_recv_trace;                   /* DIAG: calls left to trace after a client is adopted */
+
 static void service_client(client_t *c)
 {
     const uint16_t space = (uint16_t)(RX_BUF - c->len);
@@ -177,8 +183,21 @@ static void service_client(client_t *c)
         return;
     }
 
+    /* DIAG (temporary): trace the first calls after a client is adopted, and any slow call. */
+    const bool trace = (s_recv_trace > 0U);
+    if (trace) {
+        s_recv_trace--;
+        log_debug(TAG, "recv begin sock=%d t=%u", (int)c->sock, (unsigned)now_ms());
+    }
+    const uint32_t rv_t0 = now_ms();
     /* Waits up to ~100 ms for data (vendor: even with SO_RCVTIMEO = 0). */
     const ssize_t n = W6X_Net_Recv(c->sock, &c->buf[c->len], space, 0);
+    const uint32_t rv_dt = now_ms() - rv_t0;
+    if (rv_dt > 400U) {
+        log_warn(TAG, "W6X_Net_Recv slow: %u ms (n=%d)", (unsigned)rv_dt, (int)n);
+    } else if (trace) {
+        log_debug(TAG, "recv end %u ms n=%d", (unsigned)rv_dt, (int)n);
+    }
     if (n > 0) {
         if (c->len == 0U) {
             c->partial_since_ms = now_ms();
@@ -225,6 +244,8 @@ static void adopt(int32_t sock)
             s_cl[i].len = 0U;
             s_cl[i].last_rx_ms = now_ms();
             s_cl[i].partial_since_ms = s_cl[i].last_rx_ms;
+            s_recv_trace = 6U;                 /* DIAG */
+            log_debug(TAG, "client adopted: slot %u socket %d", (unsigned)i, (int)sock);
             return;
         }
     }

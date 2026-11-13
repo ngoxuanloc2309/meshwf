@@ -14,8 +14,12 @@
 
 #include "plc_engine.h"
 #include "plc_modbus_cfg.h"
+#include "plc_systag.h"        /* System Tags 1000..1007 / Modbus 0x0820: SYS_COMM_OK source */
 #include "sx_adc.h"
 #include "splc_opt.h"
+#if SPLC_MQTT_ENABLE
+#include "st67_mqtt.h"         /* st67_mqtt_is_connected() for SYS_COMM_OK source 2 */
+#endif
 #include "splc_log.h"
 #include "logger.h"
 
@@ -25,6 +29,13 @@
 #endif
 
 static const char *TAG = "SPLC_PORT";
+
+#if SPLC_HOST_WIFI_TASK
+/* st67w611_ready_recover.c (libs/st67w611/port/src) */
+extern volatile uint32_t g_st67_ready_recover_count;
+extern volatile uint32_t g_st67_ready_recover_result;
+extern volatile uint32_t g_st67_ready_recover_rounds;
+#endif
 
 /* ------------------------------------------------------------------------ */
 /* configASSERT capture (see Core/Inc/FreeRTOSConfig.h, USER CODE 1)           */
@@ -94,6 +105,35 @@ uint32_t sx_adc_read(sx_adc_config_t *config)
 }
 
 /* ------------------------------------------------------------------------ */
+/* System Tags: SYS_COMM_OK source (tag 1007 / Modbus 0x0827)                   */
+/* SPLC_SYSTAG_COMM_SRC: 0 = none registered, SYS_COMM_OK stays 1 (as before)  */
+/*                       1 = Wi-Fi has an IP address                            */
+/*                       2 = MQTT client of the module is connected             */
+/* PENDING the App team's answer: the meaning of SYS_COMM_OK is not decided.   */
+/* Both getters are safe to call from the SPLC task (critical section / header */
+/* says st67_mqtt_is_connected() may be called from any task) and do not block.*/
+/* ------------------------------------------------------------------------ */
+
+#ifndef SPLC_SYSTAG_COMM_SRC
+#define SPLC_SYSTAG_COMM_SRC   0
+#endif
+
+#if SPLC_SYSTAG_ENABLE && (SPLC_SYSTAG_COMM_SRC == 1)
+static bool systag_comm_ok(void)
+{
+    return splc_wifi_port_has_ip();
+}
+#elif SPLC_SYSTAG_ENABLE && (SPLC_SYSTAG_COMM_SRC == 2)
+#if !SPLC_MQTT_ENABLE
+#error "SPLC_SYSTAG_COMM_SRC 2 needs SPLC_MQTT_ENABLE = 1"
+#endif
+static bool systag_comm_ok(void)
+{
+    return st67_mqtt_is_connected();
+}
+#endif
+
+/* ------------------------------------------------------------------------ */
 /* Engine task                                                               */
 /* ------------------------------------------------------------------------ */
 
@@ -103,6 +143,13 @@ static void splc_task(void *arg)
 
     sx_mqtt_init();      /* register the publish callback BEFORE the engine starts (plc_mqtt.h) */
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
+#if SPLC_SYSTAG_ENABLE && (SPLC_SYSTAG_COMM_SRC != 0)
+    plc_systag_set_comm_ok_fn(systag_comm_ok);   /* before the first scan; without it SYS_COMM_OK = 1 */
+    log_info(TAG, "System Tags: SYS_COMM_OK source = %d (1 = Wi-Fi IP, 2 = MQTT connected)",
+             (int)SPLC_SYSTAG_COMM_SRC);
+#elif SPLC_SYSTAG_ENABLE
+    log_info(TAG, "System Tags: no SYS_COMM_OK source registered, SYS_COMM_OK = 1");
+#endif
     splc_rtc_port_init();    /* external RTC (I2C1): chip init + plc_rtc hooks, before the first scan */
     splc_wifi_port_init();   /* register the Wi-Fi ops (0x1300 block); the ST67 task does the work */
     splc_indicators_port_init();   /* 3 LEDs; the library closes its table at the first scan */
@@ -330,6 +377,10 @@ static void wifi_task(void *arg)
         st = st67w611_start();
         s_st67_start_ms = now_ms() - s_st67_start_t0;
         log_info(TAG, "st67w611_start returned %d after %u ms", (int)st, (unsigned)s_st67_start_ms);
+        log_info(TAG, "ready_recover: ran %u time(s), last result %u (1 ok, 2 AT+RST failed, 3 no ready, "
+                      "4 AT answers), rounds %u",
+                 (unsigned)g_st67_ready_recover_count, (unsigned)g_st67_ready_recover_result,
+                 (unsigned)g_st67_ready_recover_rounds);
     }
     s_st67_last_status = (int32_t)st;
     if (st != ST67W611_OK) {

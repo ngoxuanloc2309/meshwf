@@ -453,6 +453,32 @@ bool st67_mqtt_is_connected(void)
     return s_connected;
 }
 
+st67_mqtt_status_t st67_mqtt_query_session(bool *connected, uint32_t *state_out)
+{
+    if (connected == NULL) {
+        return ST67_MQTT_ERR_ARG;
+    }
+    if (!s_inited) {
+        return ST67_MQTT_ERR_NOT_INIT;
+    }
+    memset(&s_vendor_cfg, 0, sizeof(s_vendor_cfg));      /* same scratch as drop_stale_session(): ST67 task only */
+    s_vendor_cfg.State = ST67_MQTT_STATE_UNREAD;
+    const W6X_Status_t q = W6X_MQTT_GetConnectionStatus(&s_vendor_cfg);
+    const uint32_t state = s_vendor_cfg.State;
+    memset(&s_vendor_cfg, 0, sizeof(s_vendor_cfg));      /* no credentials stay in the scratch */
+    if (state_out != NULL) {
+        *state_out = state;
+    }
+    if (state == ST67_MQTT_STATE_UNREAD) {
+        log_debug(TAG, "session query: state not readable (vendor status %d)", (int)q);
+        return ST67_MQTT_ERR_VENDOR;
+    }
+    *connected = (state == (uint32_t)W6X_MQTT_STATE_CONNECTED) ||
+                 (state == (uint32_t)W6X_MQTT_STATE_CONNECTED_NO_SUB) ||
+                 (state == (uint32_t)W6X_MQTT_STATE_CONNECTED_SUBSCRIBED);
+    return ST67_MQTT_OK;
+}
+
 st67_mqtt_status_t st67_mqtt_recover_module(void)
 {
     const st67w611_status_t r = st67w611_soft_reset();
