@@ -69,7 +69,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pins : Button_Pin IN1_Pin */
   GPIO_InitStruct.Pin = Button_Pin|IN1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ST67CS_Pin RS485_RDE_Pin */
@@ -97,7 +97,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pins : IN4_Pin IN3_Pin IN2_Pin */
   GPIO_InitStruct.Pin = IN4_Pin|IN3_Pin|IN2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }
