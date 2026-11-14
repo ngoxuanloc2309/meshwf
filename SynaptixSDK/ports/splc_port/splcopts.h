@@ -52,6 +52,11 @@
 #define SPLC_WIFI_ENABLE              1
 /* Connection indicator: LEDs POWER PC15 / STATUS PC14 / LINK PC13 (splc_indicators_port.c). */
 #define SPLC_INDICATOR_ENABLE         1
+/* LED STATUS: steady on when every connection is OK; otherwise 500 ms on / 500 ms off. These three
+ * library constants are global (CONNECTING and FAILED share the rhythm): period 1000 ms, flash 500 ms. */
+#define SPLC_IND_STATUS_CONNECTING_MS 1000
+#define SPLC_IND_STATUS_FAILED_MS     1000
+#define SPLC_LED_FLASH_ON_MS          500
 /* Wi-Fi credentials survive a power cycle: stored by splc_wifi_store.c (one Flash sector). */
 #define SPLC_HOST_WIFI_PERSIST        1
 

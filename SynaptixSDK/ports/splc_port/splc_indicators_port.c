@@ -107,7 +107,7 @@ void splc_indicators_port_init(void)
 
     static const splc_ind_proto_t wifi = {
         .name       = "wifi",
-        .pattern    = { .on_ms = 1000U, .off_ms = 1000U, .count = 1U, .pause_ms = 2000U },   /* 1 flash / s */
+        .pattern    = { .on_ms = 500U, .off_ms = 500U, .count = 1U, .pause_ms = 0U },       /* Wi-Fi: 500 ms on / 500 ms off */
         .get_state  = wifi_state,
         .ctx        = NULL,
         .depends_on = 0U,
@@ -120,7 +120,7 @@ void splc_indicators_port_init(void)
 #if SPLC_MQTT_ENABLE
     static const splc_ind_proto_t mqtt = {
         .name       = "mqtt",
-        .pattern    = { .on_ms = 1000U, .off_ms = 2000U, .count = 2U, .pause_ms = 2000U }, /* 2 flashes, pause */
+        .pattern    = { .on_ms = 2000U, .off_ms = 2000U, .count = 1U, .pause_ms = 0U },     /* MQTT: 2 s on / 2 s off */
         .get_state  = mqtt_state,
         .ctx        = NULL,
         .depends_on = 1U,        /* row index + 1 of "wifi" (the first registered row) */
