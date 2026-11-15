@@ -517,6 +517,17 @@ static volatile bool s_module_reset;
 #endif
 static uint8_t  s_fail_streak;
 static uint32_t s_streak_seq;
+
+/* Publish failures in a row on a LIVE session: the module still reports "connected" but publishes
+ * keep failing. After this many (0 = feature off) the session is dropped and re-opened through the
+ * normal reconnect path. If the reconnect then fails SX_MQTT_RECOVER_AFTER_FAILS times, the
+ * existing one-shot module restart (maybe_recover_module) takes over -- this feature never
+ * restarts the module itself. Only module failures count (vendor error / timeout); a refused
+ * argument (topic/payload too long) cannot be cured by reconnecting. */
+#ifndef SX_MQTT_PUBLISH_FAILS_RECONNECT
+#define SX_MQTT_PUBLISH_FAILS_RECONNECT 3U
+#endif
+static uint8_t  s_pub_fail_streak;
 static bool     s_recover_armed = true;
 
 void sx_mqtt_notify_module_reset(void)
@@ -625,6 +636,7 @@ static void sub_apply(uint32_t now_ms)
 
 static void go_down(uint32_t now_ms, uint16_t err, bool backoff)
 {
+    s_pub_fail_streak = 0U;              /* the session is gone: its publish failures no longer count */
 #if SPLC_MQTT_SUB_ENABLE
     sub_session_reset();
 #endif
@@ -708,7 +720,7 @@ static void try_connect(uint32_t now_ms)
     log_info(TAG, "MQTT connected (generation %u)", (unsigned)box.generation);
 }
 
-static void send_one(void)
+static void send_one(uint32_t now_ms)
 {
     if (s_hello_pending) {
         s_hello_pending = false;
@@ -734,14 +746,34 @@ static void send_one(void)
     } else {
         log_debug(TAG, "publish end %u ms (status %d)", (unsigned)pub_dt, (int)r);
     }
-    if (r != ST67_MQTT_OK) {
+    bool reconnect = false;
+    if (r == ST67_MQTT_OK) {
+        s_pub_fail_streak = 0U;
+    } else {
         log_warn(TAG, "publish failed (%d): message dropped", (int)r);
+#if SX_MQTT_PUBLISH_FAILS_RECONNECT != 0U
+        if ((r == ST67_MQTT_ERR_VENDOR || r == ST67_MQTT_ERR_TIMEOUT) && s_pub_fail_streak < 255U) {
+            s_pub_fail_streak++;
+            log_debug(TAG, "publish fail streak %u/%u", (unsigned)s_pub_fail_streak,
+                      (unsigned)SX_MQTT_PUBLISH_FAILS_RECONNECT);
+        }
+        reconnect = (s_pub_fail_streak >= SX_MQTT_PUBLISH_FAILS_RECONNECT);
+#endif
     }
 
+    /* Pop the message BEFORE any go_down(): go_down() empties the queue (count = 0), so a later
+     * s_q_count-- would wrap the counter. */
     taskENTER_CRITICAL();
     s_q_tail = (uint8_t)((s_q_tail + 1U) % SX_MQTT_QUEUE_DEPTH);
     s_q_count--;
     taskEXIT_CRITICAL();
+
+    if (reconnect) {
+        log_warn(TAG, "%u publish failures in a row: dropping the MQTT session and reconnecting",
+                 (unsigned)s_pub_fail_streak);
+        (void)st67_mqtt_disconnect();
+        go_down(now_ms, 2U /* TCP_RESET: vendor gives no detail */, true);   /* also clears the streak */
+    }
 }
 
 #if SPLC_MQTT_TLS_CERT_ENABLE
@@ -867,7 +899,7 @@ void sx_mqtt_service(uint32_t now_ms, bool link_up)
 #if SPLC_MQTT_SUB_ENABLE
         sub_apply(now_ms);
 #endif
-        send_one();
+        send_one(now_ms);
         break;
     }
     }
