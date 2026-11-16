@@ -31,7 +31,7 @@
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 1
 
 /* Logging (LPUART1) */
-#define SPLC_LOG_LEVEL                3
+#define SPLC_LOG_LEVEL                4
 
 /* Clock: external RTC IC on I2C1 (decision 57). The hooks are registered by
  * the product glue (ports/splc_port) before plc_engine_init(). */
