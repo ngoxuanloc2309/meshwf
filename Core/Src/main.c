@@ -21,6 +21,7 @@
 #include "cmsis_os2.h"
 #include "i2c.h"
 #include "icache.h"
+#include "iwdg.h"
 #include "usart.h"
 #include "rng.h"
 #include "rtc.h"
@@ -114,6 +115,7 @@ int main(void)
   MX_RNG_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */

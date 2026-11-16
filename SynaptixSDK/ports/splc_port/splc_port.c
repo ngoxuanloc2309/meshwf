@@ -3,6 +3,7 @@
 #include "splc_rtc_port.h"
 #include "splc_indicators_port.h"
 #include "splc_boot_button_port.h"   /* PA0 held 7 s -> system bootloader (DFU) */
+#include "splc_wdt_port.h"           /* IWDG supervisor (SPLC_WDG_ENABLE), channel NET of the ST67 task */
 #include "sx_mqtt.h"
 #include "st67_modbus_tcp.h"   /* Modbus TCP slave over the ST67 sockets */
 
@@ -144,6 +145,7 @@ static void splc_task(void *arg)
 
     sx_mqtt_init();      /* register the publish callback BEFORE the engine starts (plc_mqtt.h) */
     plc_engine_init();   /* board_hw_init() runs inside: log UART, DI/DO, RS485 link */
+    splc_wdt_port_boot_report();   /* reset cause + IWDG settings (needs the logger) */
 #if SPLC_SYSTAG_ENABLE && (SPLC_SYSTAG_COMM_SRC != 0)
     plc_systag_set_comm_ok_fn(systag_comm_ok);   /* before the first scan; without it SYS_COMM_OK = 1 */
     log_info(TAG, "System Tags: SYS_COMM_OK source = %d (1 = Wi-Fi IP, 2 = MQTT connected)",
@@ -360,6 +362,7 @@ static void wifi_task(void *arg)
             log_warn(TAG, "ST67 module not detected on RDY: Wi-Fi/MQTT off, re-probing every 5 s");
             absent_logged = true;
         }
+        plc_wdt_alive(SPLC_WDT_CH_NET);   /* no module fitted is not a fault: the re-probe loop is alive */
         vTaskDelay(pdMS_TO_TICKS(5000U));
     }
     if (absent_logged) {
@@ -371,6 +374,9 @@ static void wifi_task(void *arg)
         log_error(TAG, "ST67 vendor log init failed (vendor messages will be lost)");
     }
 
+    /* st67w611_init() + st67w611_start() block for several seconds (start ~5.8 s): give channel NET
+     * room; plc_wdt_alive() below sets the normal deadline again once the bring-up is over. */
+    plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_ST67_START_GRACE_MS);
     s_st67_stage = ST67_STAGE_INIT;
     st67w611_status_t st = st67w611_init(&cfg);
     if (st == ST67W611_OK) {
@@ -400,6 +406,7 @@ static void wifi_task(void *arg)
 #if SPLC_HOST_HEAP_LOG_MS
     TickType_t next_log = xTaskGetTickCount();
 #endif
+    plc_wdt_alive(SPLC_WDT_CH_NET);   /* bring-up over: back to the normal deadline */
     for (;;) {
         splc_wifi_port_service(SPLC_HOST_ST67_LOOP_MS);
         if (st == ST67W611_OK) {   /* MQTT client of the module: only after the bring-up */
@@ -418,6 +425,7 @@ static void wifi_task(void *arg)
             next_log = xTaskGetTickCount() + pdMS_TO_TICKS(SPLC_HOST_HEAP_LOG_MS);
         }
 #endif
+        plc_wdt_alive(SPLC_WDT_CH_NET);   /* one full pass of the ST67 task loop */
     }
 }
 #endif /* SPLC_HOST_WIFI_TASK */
@@ -428,6 +436,8 @@ bool splc_host_start(void)
     if (started) {
         return false;
     }
+
+    splc_wdt_port_init();   /* hooks + channel NET, before the tasks exist (no logging yet) */
 
     if (xTaskCreate(splc_task, "SPLC", (configSTACK_DEPTH_TYPE)SPLC_HOST_TASK_STACK_WORDS,
                     NULL, SPLC_HOST_TASK_PRIO, NULL) != pdPASS) {
@@ -444,6 +454,10 @@ bool splc_host_start(void)
                        SPLC_HOST_ST67_DIAG_PRIO, NULL);
 #endif
 #endif
+
+    if (!splc_wdt_port_start_task()) {   /* the supervisor: the only caller of the IWDG refresh */
+        return false;
+    }
 
     started = true;
     return true;

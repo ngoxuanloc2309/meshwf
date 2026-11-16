@@ -16,6 +16,7 @@ add_library(meshwf_splc_port OBJECT
     splc_rtc_port.c
     splc_indicators_port.c
     splc_boot_button_port.c
+    splc_wdt_port.c
 )
 
 target_include_directories(meshwf_splc_port PUBLIC

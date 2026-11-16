@@ -31,7 +31,7 @@
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 1
 
 /* Logging (LPUART1) */
-#define SPLC_LOG_LEVEL                4
+#define SPLC_LOG_LEVEL                3
 
 /* Clock: external RTC IC on I2C1 (decision 57). The hooks are registered by
  * the product glue (ports/splc_port) before plc_engine_init(). */
@@ -65,5 +65,18 @@
 #define SPLC_MODBUS_MAX_TRANSPORTS    2
 
 #define SPLC_SYSTAG_ENABLE            0
+
+/* Watchdog (docs/SPLC_Watchdog_Design.md). 0 = off: the firmware behaves as before. Set 1 ONLY
+ * after the IWDG is configured in CubeMX (software start, window = maximum, handle hiwdg; the
+ * timeout below must match its prescaler/reload) and the project was regenerated. Not built or
+ * tried on the board yet: start with the generous values below and read the boot log. */
+#define SPLC_WDG_ENABLE              0
+/* #define SPLC_WDG_HW_TIMEOUT_MS        5000U */  /* what CubeMX is set to; checked against hiwdg at boot */
+/* #define SPLC_WDG_SERVICE_MS           500U */   /* supervisor period */
+/* #define SPLC_WDG_PLC_TIMEOUT_MS       2000U */  /* engine task: gap between two plc_engine_poll() */
+/* #define SPLC_WDG_NET_TIMEOUT_MS       45000U */ /* ST67 task loop: first guess, measure then tighten */
+/* #define SPLC_WDG_BOOT_GRACE_MS        30000U */ /* time until the first sign of life of a channel */
+/* #define SPLC_WDG_FLASH_GRACE_MS       3000U */  /* extra time for the engine task around a Flash erase+write */
+/* #define SPLC_WDG_ST67_START_GRACE_MS  30000U */ /* extra time for st67w611_init()+start() */
 
 #endif /* SPLCOPTS_H */
