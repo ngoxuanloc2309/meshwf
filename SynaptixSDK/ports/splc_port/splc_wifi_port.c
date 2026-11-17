@@ -140,6 +140,24 @@ bool splc_wifi_port_has_ip(void)
     return up;
 }
 
+/* ST67 task liveness (see splc_wifi_port.h). Plain 32-bit stores: no lock needed. */
+static volatile uint32_t s_loop_tick_ms;
+static volatile bool     s_loop_seen;
+
+void splc_wifi_port_loop_tick(void)
+{
+    s_loop_tick_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    s_loop_seen    = true;
+}
+
+uint32_t splc_wifi_port_loop_age_ms(void)
+{
+    if (!s_loop_seen) {
+        return 0U;                       /* the ST67 task has not finished its bring-up yet */
+    }
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS) - s_loop_tick_ms;
+}
+
 int splc_wifi_port_link_state(void)
 {
     taskENTER_CRITICAL();

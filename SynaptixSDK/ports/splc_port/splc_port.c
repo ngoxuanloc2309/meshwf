@@ -363,6 +363,7 @@ static void wifi_task(void *arg)
             absent_logged = true;
         }
         plc_wdt_alive(SPLC_WDT_CH_NET);   /* no module fitted is not a fault: the re-probe loop is alive */
+        splc_wifi_port_loop_tick();       /* indicator: the ST67 task is running */
         vTaskDelay(pdMS_TO_TICKS(5000U));
     }
     if (absent_logged) {
@@ -407,6 +408,7 @@ static void wifi_task(void *arg)
     TickType_t next_log = xTaskGetTickCount();
 #endif
     plc_wdt_alive(SPLC_WDT_CH_NET);   /* bring-up over: back to the normal deadline */
+    splc_wifi_port_loop_tick();
     for (;;) {
         splc_wifi_port_service(SPLC_HOST_ST67_LOOP_MS);
         if (st == ST67W611_OK) {   /* MQTT client of the module: only after the bring-up */
@@ -426,6 +428,7 @@ static void wifi_task(void *arg)
         }
 #endif
         plc_wdt_alive(SPLC_WDT_CH_NET);   /* one full pass of the ST67 task loop */
+        splc_wifi_port_loop_tick();       /* indicator: LEDs report FAILED when this stops (SPLC_IND_NET_STALE_MS) */
     }
 }
 #endif /* SPLC_HOST_WIFI_TASK */

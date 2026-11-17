@@ -90,6 +90,13 @@ bool splc_wifi_port_has_ip(void);
  *   0 DISABLED    only without SPLC_WIFI_ENABLE */
 int splc_wifi_port_link_state(void);
 
+/* ST67 task liveness for the indicator. The LEDs are drawn from caches and flags that the ST67
+ * task (and the vendor callbacks) keep; if that task hangs they keep saying "connected". The ST67
+ * task calls splc_wifi_port_loop_tick() once per loop pass; splc_wifi_port_loop_age_ms() is the time
+ * since the last tick (0 until the first one). Any task. */
+void     splc_wifi_port_loop_tick(void);
+uint32_t splc_wifi_port_loop_age_ms(void);
+
 /* Facade event hook (st67w611_config_t.event_cb). Vendor callback context: it only copies
  * a few values and wakes the ST67 task. Safe to call before splc_wifi_port_init(). */
 void splc_wifi_port_on_event(st67w611_event_t event, void *event_data);
@@ -112,6 +119,8 @@ static inline void splc_wifi_port_set_ready(bool ready) { (void)ready; }
 static inline void splc_wifi_port_service(uint32_t wait_ms) { (void)wait_ms; }
 static inline bool splc_wifi_port_has_ip(void) { return false; }
 static inline int  splc_wifi_port_link_state(void) { return 0; }
+static inline void     splc_wifi_port_loop_tick(void) {}
+static inline uint32_t splc_wifi_port_loop_age_ms(void) { return 0U; }
 static inline void splc_wifi_port_on_event(st67w611_event_t event, void *event_data)
 { (void)event; (void)event_data; }
 
