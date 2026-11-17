@@ -49,7 +49,7 @@ static void led_set(SPLC_LED_ID led, bool on, void *ctx)
 
 /* The LEDs below are drawn from caches/flags that the ST67 task and the vendor callbacks keep up to
  * date. If that task hangs they stay "connected" for ever, so a dead link looked healthy. When the
- * ST67 task has not finished a loop pass for this long, Wi-Fi and MQTT are reported FAILED.
+ * ST67 task has not finished a loop pass for this long, Wi-Fi and MQTT are reported STALLED.
  * 0 = off. The pass can legitimately take a while (connect, scan, module restart): keep it generous. */
 #ifndef SPLC_IND_NET_STALE_MS
 #define SPLC_IND_NET_STALE_MS 45000U
@@ -71,7 +71,7 @@ static SPLC_LINK_STATE wifi_state(void *ctx)
 {
     (void)ctx;
     if (net_task_stale()) {
-        return SPLC_LINK_STATE_FAILED;
+        return SPLC_LINK_STATE_STALLED;
     }
     return (SPLC_LINK_STATE)splc_wifi_port_link_state();
 }
@@ -83,7 +83,7 @@ static SPLC_LINK_STATE mqtt_state(void *ctx)
 {
     (void)ctx;
     if (net_task_stale()) {
-        return SPLC_LINK_STATE_FAILED;
+        return SPLC_LINK_STATE_STALLED;
     }
     if (st67_mqtt_is_connected()) {
         return SPLC_LINK_STATE_CONNECTED;
