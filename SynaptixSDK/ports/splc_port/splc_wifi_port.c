@@ -38,6 +38,30 @@ static const char *TAG = "SPLC_WIFI";
 #define SPLC_HOST_WIFI_DEFAULT_RETRY_MS 30000U
 #endif
 
+/* Automatic reconnect of the network the App configured or the Flash restored (the default
+ * network above has its own retry). 1 = on, 0 = off (the old behaviour: no retry).
+ *
+ * Every SPLC_HOST_WIFI_LINK_CHECK_MS the idle worker checks the link. When there is no IP, the
+ * App wants the link up (see s_want_link) and nothing else is running, it reconnects, at most
+ * once per SPLC_HOST_WIFI_RECONNECT_MS. It follows the Auto-Reconnect bit (bit 4) of the
+ * configuration the App sent (WIFI_004 ICD): bit cleared = no automatic reconnect. After each
+ * FAILED attempt the pause doubles, up to
+ * SPLC_HOST_WIFI_RECONNECT_MAX_MS, and goes back to SPLC_HOST_WIFI_RECONNECT_MS as soon as the
+ * IP is back. MAX = RECONNECT (the default) means a fixed pause. The real period is the pause
+ * PLUS the time a failed connect takes (the worker is blocked inside it). */
+#ifndef SPLC_HOST_WIFI_RECONNECT
+#define SPLC_HOST_WIFI_RECONNECT        1
+#endif
+#ifndef SPLC_HOST_WIFI_RECONNECT_MS
+#define SPLC_HOST_WIFI_RECONNECT_MS     30000U
+#endif
+#ifndef SPLC_HOST_WIFI_RECONNECT_MAX_MS
+#define SPLC_HOST_WIFI_RECONNECT_MAX_MS SPLC_HOST_WIFI_RECONNECT_MS
+#endif
+#if SPLC_HOST_WIFI_RECONNECT_MAX_MS < SPLC_HOST_WIFI_RECONNECT_MS
+#error "SPLC_HOST_WIFI_RECONNECT_MAX_MS must be >= SPLC_HOST_WIFI_RECONNECT_MS"
+#endif
+
 /* Work for the ST67 task. Set by the engine-side callbacks / events, cleared by the worker. */
 #define CMD_CONNECT     0x01U
 #define CMD_DISCONNECT  0x02U
@@ -82,6 +106,11 @@ static volatile bool         s_load_done;
 static volatile bool         s_stored;
 static volatile bool         s_user_touched;
 static volatile bool         s_rejoin_pending;    /* the module restarted: rejoin the App's network */
+/* The App (or the Flash restore) wants the link UP: set by an accepted CONNECT, cleared by
+ * DISCONNECT, FORGET / FACTORY_RESET and Enable = 0. Only then does the reconnect service run.
+ * s_recon_rearm: a new CONNECT was accepted, the worker restarts its pause / counters. */
+static volatile bool         s_want_link;
+static volatile bool         s_recon_rearm;
 
 /* Worker-private (no lock needed). */
 static uint32_t              s_link_next_ms;      /* next idle link check, 0 = at once */
@@ -93,6 +122,13 @@ static bool                  s_default_logged;    /* the "why not" line is print
 static uint32_t              s_ip_poll_until_ms;   /* 0 = not waiting for an IP */
 static uint32_t              s_ip_poll_next_ms;
 static uint32_t              s_mac_next_ms;
+#if SPLC_HOST_WIFI_RECONNECT
+static uint32_t              s_recon_next_ms;     /* earliest next reconnect, 0 = at once */
+static uint32_t              s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+static uint32_t              s_down_since_ms;     /* start of the current outage, 0 = link up */
+static uint16_t              s_fail_streak;       /* failed reconnects since the link was last up */
+static uint32_t              s_noip_since_ms;     /* CONNECTED without IP since, 0 = not in that state */
+#endif
 
 static uint32_t now_ms(void)
 {
@@ -386,7 +422,8 @@ static int op_connect(void *ctx, const splc_wifi_config_t *cfg)
         return PLC_WIFI_ERR_HW_NOT_READY;
     }
     if ((cfg->control_flags & PLC_WIFI_CTRL_ENABLE) == 0U) {
-        return PLC_WIFI_ERR_HW_NOT_READY;      /* Enable = 0: the App asks for Wi-Fi off */
+        s_want_link = false;                   /* Enable = 0: the App asks for Wi-Fi off */
+        return PLC_WIFI_ERR_HW_NOT_READY;
     }
     if (((cfg->control_flags & PLC_WIFI_CTRL_MODE_MASK) >> PLC_WIFI_CTRL_MODE_SHIFT) != 0U) {
         log_warn(TAG, "connect refused: only station mode is supported");
@@ -411,6 +448,8 @@ static int op_connect(void *ctx, const splc_wifi_config_t *cfg)
     s_connecting = true;
     s_gen++;
     s_cmd &= ~CMD_DISCONNECT;                  /* the newest request wins */
+    s_want_link = true;                        /* keep the link up from now on */
+    s_recon_rearm = true;
     taskEXIT_CRITICAL();
     post(CMD_CONNECT);
     return PLC_WIFI_ERR_NONE;
@@ -427,6 +466,7 @@ static int op_disconnect(void *ctx)
     s_connecting = false;
     s_gen++;
     s_cmd &= ~CMD_CONNECT;
+    s_want_link = false;                       /* the App wants it off: no automatic reconnect */
     taskEXIT_CRITICAL();
     post(CMD_DISCONNECT);
     return PLC_WIFI_ERR_NONE;
@@ -507,6 +547,7 @@ static void op_erase(void *ctx)
 {
     (void)ctx;
     s_user_touched = true;                     /* FORGET / FACTORY_RESET: no default either */
+    s_want_link = false;                       /* ... and no automatic reconnect */
     meshwf_wifi_store_erase();
 }
 #endif
@@ -696,6 +737,117 @@ static void default_service(uint32_t now)
     if (s_default_next_ms == 0U) { s_default_next_ms = 1U; }
 }
 
+#if SPLC_HOST_WIFI_RECONNECT
+/* Worker only, from the idle link check, right after refresh_link(). Brings the App's network
+ * back when it is lost. Does nothing while the App does not want the link (s_want_link), while
+ * a connect / scan / command is running, or while DHCP is still being waited for. The default
+ * network is left to default_service(). */
+static void reconnect_check(uint32_t now)
+{
+    if (s_recon_rearm) {                       /* a new CONNECT from the App: start from scratch */
+        s_recon_rearm    = false;
+        s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+        s_recon_next_ms  = 0U;
+        s_down_since_ms  = 0U;
+        s_fail_streak    = 0U;
+        s_noip_since_ms  = 0U;
+    }
+
+    taskENTER_CRITICAL();
+    const uint16_t conn = s_live.conn;
+    taskEXIT_CRITICAL();
+
+    if (!s_want_link) {
+        s_down_since_ms = 0U;                  /* nothing is expected: no outage to measure */
+        s_fail_streak   = 0U;
+        s_noip_since_ms = 0U;
+        return;
+    }
+
+    if (conn == PLC_WIFI_CONN_GOT_IP) {
+        if (s_down_since_ms != 0U || s_fail_streak != 0U) {
+            const uint32_t down_s = (s_down_since_ms != 0U) ? ((now - s_down_since_ms) / 1000U) : 0U;
+            log_info(TAG, "Wi-Fi back after %lu s down, %u failed reconnect(s)",
+                     (unsigned long)down_s, (unsigned)s_fail_streak);
+        }
+        s_down_since_ms  = 0U;
+        s_fail_streak    = 0U;
+        s_noip_since_ms  = 0U;
+        s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+        s_recon_next_ms  = 0U;
+        return;
+    }
+
+    if (s_down_since_ms == 0U) {
+        s_down_since_ms = (now != 0U) ? now : 1U;
+    }
+    if (conn == PLC_WIFI_CONN_CONNECTING) {
+        return;                                /* someone is already joining */
+    }
+    if (conn == PLC_WIFI_CONN_CONNECTED) {
+        /* Associated, no IP. refresh_link() re-arms its own poll window every time, so the time
+         * spent in this state is measured here: after SPLC_HOST_WIFI_IP_WAIT_MS it is stuck. */
+        if (s_noip_since_ms == 0U) {
+            s_noip_since_ms = (now != 0U) ? now : 1U;
+        }
+        if ((uint32_t)(now - s_noip_since_ms) < SPLC_HOST_WIFI_IP_WAIT_MS) {
+            return;                            /* DHCP may still answer */
+        }
+    } else {
+        s_noip_since_ms = 0U;
+    }
+    if (!s_ready || s_connecting || s_cmd != 0U || s_scan_state == PLC_WIFI_SCAN_SCANNING) {
+        return;
+    }
+    if (s_recon_next_ms != 0U && !time_reached(now, s_recon_next_ms)) {
+        return;
+    }
+
+    bool go = false;
+    char ssid[sizeof(s_cfg.ssid)];
+    taskENTER_CRITICAL();
+    if (s_want_link && !s_connecting && s_cfg.ssid[0] != '\0' &&
+        (s_cfg.control_flags & PLC_WIFI_CTRL_ENABLE) != 0U &&
+        (s_cfg.control_flags & PLC_WIFI_CTRL_AUTO_RECONNECT) != 0U) {
+        s_connecting = true;
+        s_gen++;
+        go = true;
+    }
+    memcpy(ssid, s_cfg.ssid, sizeof(ssid));
+    taskEXIT_CRITICAL();
+    ssid[sizeof(ssid) - 1U] = '\0';
+    if (!go) {
+        return;       /* no SSID known, Wi-Fi disabled, or the App cleared the Auto-Reconnect bit */
+    }
+
+    log_info(TAG, "Wi-Fi down for %lu s (%u failed reconnect(s)): reconnecting to \"%s\"",
+             (unsigned long)((now - s_down_since_ms) / 1000U), (unsigned)s_fail_streak, ssid);
+    do_connect();                              /* clears s_connecting when it finishes */
+
+    taskENTER_CRITICAL();
+    const uint16_t after = s_live.conn;
+    taskEXIT_CRITICAL();
+
+    const uint32_t t = now_ms();
+    if (after == PLC_WIFI_CONN_GOT_IP || after == PLC_WIFI_CONN_CONNECTED ||
+        after == PLC_WIFI_CONN_CONNECTING) {
+        s_recon_next_ms = t + s_recon_pause_ms;     /* joined (IP may still come): same pause */
+    } else {
+        if (s_fail_streak < 0xFFFFU) {
+            s_fail_streak++;
+        }
+        s_recon_next_ms = t + s_recon_pause_ms;
+        if (s_recon_pause_ms < SPLC_HOST_WIFI_RECONNECT_MAX_MS) {     /* back off, capped */
+            const uint32_t next = (s_recon_pause_ms > (SPLC_HOST_WIFI_RECONNECT_MAX_MS / 2U))
+                                      ? SPLC_HOST_WIFI_RECONNECT_MAX_MS
+                                      : (s_recon_pause_ms * 2U);
+            s_recon_pause_ms = next;
+        }
+    }
+    if (s_recon_next_ms == 0U) { s_recon_next_ms = 1U; }
+}
+#endif /* SPLC_HOST_WIFI_RECONNECT */
+
 void splc_wifi_port_service(uint32_t wait_ms)
 {
     if (s_task == NULL) {
@@ -753,6 +905,9 @@ void splc_wifi_port_service(uint32_t wait_ms)
         s_link_next_ms = now_ms() + SPLC_HOST_WIFI_LINK_CHECK_MS;
         if (s_link_next_ms == 0U) { s_link_next_ms = 1U; }
         refresh_link();
+#if SPLC_HOST_WIFI_RECONNECT
+        reconnect_check(now_ms());
+#endif
     }
     link_log();
 
