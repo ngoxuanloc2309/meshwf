@@ -176,6 +176,15 @@ st67w611_status_t st67w611_get_ip(uint8_t ip[4], uint8_t gateway[4],
                                   uint8_t netmask[4]);
 st67w611_status_t st67w611_ping(const char *host, uint32_t timeout_ms);
 st67w611_status_t st67w611_get_diagnostics(st67w611_diagnostics_t *diagnostics);
+
+/* Last Wi-Fi "reason" event of the module (a WLAN_FW_* code): why a join failed or why the link
+ * dropped. Returns a sequence number that grows by one per event (0 = none since boot); *code
+ * (may be NULL) receives the last code. Compare the sequence before and after an operation to know
+ * whether the module answered with a reason: a failed connect WITHOUT a new reason means the module
+ * said nothing (timeout). Safe from any task. */
+uint32_t st67w611_wifi_reason_get(uint32_t *code);
+/* Name of a reason code ("Unknown" when out of range). */
+const char *st67w611_wifi_reason_string(uint32_t code);
 /* Vendor log sink. The vendor driver logs through a queue that stays NULL until
  * vLoggingInit() runs; without it the first vendor log call (often an error) hits
  * configASSERT(pxQueue) in xQueueGenericSend and the whole system stops.

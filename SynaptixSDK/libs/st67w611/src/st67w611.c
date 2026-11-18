@@ -20,6 +20,9 @@ static uint8_t started;
 static st67w611_scan_callback_t scan_callback;
 static void *scan_user_context;
 static volatile uint8_t scan_active;
+/* Last Wi-Fi "reason" event of the module (WLAN_FW_*): why a join failed or a link dropped. */
+static volatile uint32_t wifi_reason_code;
+static volatile uint32_t wifi_reason_seq;
 static SemaphoreHandle_t operation_lock;
 
 _Static_assert(offsetof(W6X_WiFi_Scan_Result_t, Count) ==
@@ -126,6 +129,14 @@ static void vendor_wifi_callback(W6X_event_id_t event_id, void *event_args)
         set_state(ST67W611_STATE_READY, ST67W611_OK);
         diagnostics.disconnect_count++;
         publish(ST67W611_EVENT_DISCONNECTED, event_args);
+    } else if (event_id == W6X_WIFI_EVT_REASON_ID) {
+        /* event_args points at the vendor's reason code, valid only during this call: copy it.
+         * Code first, then the sequence number, so a reader that sees a new sequence also sees
+         * the new code. Not published: the facade state machine does not depend on it. */
+        if (event_args != NULL) {
+            wifi_reason_code = *(const uint32_t *)event_args;
+        }
+        wifi_reason_seq++;
     }
 }
 
@@ -493,6 +504,20 @@ st67w611_status_t st67w611_get_state(st67w611_state_t *out_state)
     *out_state = state;
     unlock_operation();
     return ST67W611_OK;
+}
+
+uint32_t st67w611_wifi_reason_get(uint32_t *code)
+{
+    const uint32_t seq = wifi_reason_seq;
+    if (code != NULL) {
+        *code = wifi_reason_code;
+    }
+    return seq;
+}
+
+const char *st67w611_wifi_reason_string(uint32_t code)
+{
+    return W6X_WiFi_ReasonToStr(&code);
 }
 
 st67w611_status_t st67w611_get_mac(uint8_t mac[6])

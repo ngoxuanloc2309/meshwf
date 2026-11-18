@@ -31,6 +31,21 @@
 #define SPLC_WDG_ST67_START_GRACE_MS     30000U
 #endif
 
+/* Extra time for channel NET around ONE blocking Wi-Fi connect (splc_wifi_port.c, do_connect).
+ * Worst case, from the vendor constants and the facade retry (port: max_transport_retries = 2):
+ *   switch: disconnect up to 5 s, then (connect 10 s + wait for the IP 15 s) x 3 attempts = 80 s,
+ *   plus 2 x 100 ms retry delay. 95 s leaves ~15 s margin. Only a connect that blocks longer than
+ *   this, a real hang, lets the NET channel expire. */
+#ifndef SPLC_WDG_WIFI_CONNECT_GRACE_MS
+#define SPLC_WDG_WIFI_CONNECT_GRACE_MS   95000U
+#endif
+
+/* Extra time for the one light AT query (st67w611_get_mac) the connect diagnostics send to a
+ * module that gave no reason: vendor W61_WIFI_TIMEOUT is 6 s, x (no retry in the query) = 6 s. */
+#ifndef SPLC_WDG_WIFI_PROBE_GRACE_MS
+#define SPLC_WDG_WIFI_PROBE_GRACE_MS     15000U
+#endif
+
 /* The supervisor runs in its own task, above the project tasks (SPLC 6, ST67 5) and the vendor
  * tasks (spi_xfer_engine 7, Modem_Process 8), so a spinning task cannot starve it; only the
  * ST67dbg task (20) is higher. Stack in words. */
