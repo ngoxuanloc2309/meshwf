@@ -15,6 +15,7 @@
 #include "st67w611_wifi_switch.h"
 #include "plc_wifi.h"
 #include "splc_log.h"
+#include "splc_wdt_port.h"            /* channel NET: grace around the blocking connect */
 #include "app_config.h"
 
 static const char *TAG = "SPLC_WIFI";
@@ -60,6 +61,16 @@ static const char *TAG = "SPLC_WIFI";
 #endif
 #if SPLC_HOST_WIFI_RECONNECT_MAX_MS < SPLC_HOST_WIFI_RECONNECT_MS
 #error "SPLC_HOST_WIFI_RECONNECT_MAX_MS must be >= SPLC_HOST_WIFI_RECONNECT_MS"
+#endif
+
+/* Connect diagnostics. 1 = after a failed connect, log ONE line that says whether the cause looks
+ * like the ENVIRONMENT (wrong SSID / password, weak signal, no antenna: the module answered with a
+ * reason that points outside the board), the MODULE (it answered with an internal failure, or it
+ * did not answer a light AT query at all) or UNKNOWN; also log every reason event of the module
+ * (it explains dropped links too). Counters only: nothing is reset or retried differently.
+ * 0 = no extra code, no log. */
+#ifndef SPLC_HOST_WIFI_DIAG
+#define SPLC_HOST_WIFI_DIAG             1
 #endif
 
 /* Work for the ST67 task. Set by the engine-side callbacks / events, cleared by the worker. */
@@ -373,6 +384,118 @@ static void refresh_link(void)
     }
 }
 
+#if SPLC_HOST_WIFI_DIAG
+typedef enum { FAIL_ENV = 0, FAIL_MODULE, FAIL_UNKNOWN } fail_class_t;
+
+static uint32_t s_logged_reason_seq;   /* last module reason event already printed, worker only */
+static uint16_t s_diag_env;            /* failed connects by class since boot, worker only */
+static uint16_t s_diag_module;
+static uint16_t s_diag_unknown;
+static uint16_t s_diag_module_streak;  /* MODULE failures in a row, cleared by ENV or by a success */
+
+/* Policy table: WLAN_FW_* reason codes (vendor w6x_types.h, W6X_WIFI_LIST) -> class.
+ * Decided from the NAMES of the codes only; it has NOT been measured on the board yet. Run the
+ * test matrix (router off, wrong password, wrong SSID, antenna removed, far away) and move codes
+ * between the lists here when the log shows something else. */
+static fail_class_t classify_reason(uint32_t code)
+{
+    switch (code) {
+    /* The firmware ran out of frame buffers or failed an internal step: not the radio link. */
+    case 1:  /* TX_AUTH_FRAME_ALLOCATE_FAILURE */
+    case 4:  /* TX_ASSOC_FRAME_ALLOCATE_FAILURE */
+    case 9:  /* 4WAY_HANDSHAKE_TX_DEAUTH_FRAME_TRANSMIT_FAILURE */
+    case 10: /* 4WAY_HANDSHAKE_TX_DEAUTH_FRAME_ALLOCATE_FAILURE */
+    case 13: /* CREATE_CHANNEL_CTX_FAILURE_WHEN_JOIN_NETWORK */
+    case 15: /* ADD_STA_FAILURE */
+    case 21: /* DISCONNECT_BY_FW_PS_TX_NULLFRAME_FAILURE */
+    case 23: /* SWITCH_CHANNEL_FAILURE */
+        return FAIL_MODULE;
+    /* The access point, the password, the security type or the signal. */
+    case 2:  /* AUTHENTICATION_FAILURE */
+    case 3:  /* AUTH_ALGO_FAILURE */
+    case 5:  /* ASSOCIATE_FAILURE */
+    case 6:  /* DEAUTH_BY_AP_WHEN_NOT_CONNECTION */
+    case 7:  /* DEAUTH_BY_AP_WHEN_CONNECTION */
+    case 8:  /* 4WAY_HANDSHAKE_ERROR_PSK_TIMEOUT_FAILURE (wrong password OR weak signal) */
+    case 11: /* AUTH_OR_ASSOC_RESPONSE_TIMEOUT_FAILURE */
+    case 12: /* SCAN_NO_BSSID_AND_CHANNEL (SSID not seen) */
+    case 16: /* BEACON_LOSS */
+    case 17: /* NETWORK_SECURITY_NOMATCH */
+    case 18: /* NETWORK_WEPLEN_ERROR */
+    case 22: /* TRAFFIC_LOSS */
+        return FAIL_ENV;
+    default: /* 0 SUCCESSFUL, 14 JOIN_NETWORK_FAILURE, 19/20 by user, 24 CFM_FAILURE, 25 REASSOC */
+        return FAIL_UNKNOWN;
+    }
+}
+
+static const char *class_name(fail_class_t c)
+{
+    return (c == FAIL_ENV) ? "ENV" : (c == FAIL_MODULE) ? "MODULE" : "UNKNOWN";
+}
+
+/* Print the module's reason events that nobody printed yet (a dropped link has one too). */
+static void reason_log(void)
+{
+    uint32_t code = 0U;
+    const uint32_t seq = st67w611_wifi_reason_get(&code);
+    if (seq != s_logged_reason_seq) {
+        s_logged_reason_seq = seq;
+        log_info(TAG, "module reason: %s (%u)", st67w611_wifi_reason_string(code), (unsigned)code);
+    }
+}
+
+/* Worker only, right after a FAILED connect. `seq0` = reason sequence before the connect. */
+static void diag_connect_failed(st67w611_status_t st, uint32_t seq0)
+{
+    uint32_t code = 0U;
+    const uint32_t seq = st67w611_wifi_reason_get(&code);
+    const bool got_reason = (seq != seq0);
+    const char *probe = "-";
+    fail_class_t cls;
+
+    if (st == ST67W611_ERR_BUSY || st == ST67W611_ERR_INVALID_ARG ||
+        st == ST67W611_ERR_INVALID_STATE || st == ST67W611_ERR_NOT_READY ||
+        st == ST67W611_ERR_NOT_INITIALIZED) {
+        cls = FAIL_UNKNOWN;                    /* refused before any radio work: not a link failure */
+    } else if (got_reason) {
+        cls = classify_reason(code);           /* the module answered: it is alive */
+    } else {
+        /* No reason at all: the module said nothing. Ask it something unrelated to Wi-Fi. A module
+         * that is stuck cannot answer; one that answers is only slow or out of range. */
+        uint8_t mac[6];
+        plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_WIFI_PROBE_GRACE_MS);
+        const st67w611_status_t ps = st67w611_get_mac(mac);
+        if (ps == ST67W611_OK) {
+            probe = "ok";
+            cls = FAIL_UNKNOWN;
+        } else {
+            probe = st67w611_status_string(ps);
+            cls = FAIL_MODULE;
+        }
+    }
+
+    if (cls == FAIL_ENV) {
+        s_diag_env++;
+        s_diag_module_streak = 0U;
+    } else if (cls == FAIL_MODULE) {
+        s_diag_module++;
+        s_diag_module_streak++;
+    } else {
+        s_diag_unknown++;
+    }
+    s_logged_reason_seq = seq;                 /* this line already says it: no second print */
+    log_warn(TAG, "connect diag: class=%s reason=%s(%u) events=%u status=%s probe=%s "
+                  "| env=%u module=%u unknown=%u module_streak=%u",
+             class_name(cls),
+             got_reason ? st67w611_wifi_reason_string(code) : "none",
+             got_reason ? (unsigned)code : 0U,
+             (unsigned)(seq - seq0), st67w611_status_string(st), probe,
+             (unsigned)s_diag_env, (unsigned)s_diag_module, (unsigned)s_diag_unknown,
+             (unsigned)s_diag_module_streak);
+}
+#endif /* SPLC_HOST_WIFI_DIAG */
+
 static void do_connect(void)
 {
     splc_wifi_config_t cfg;
@@ -384,13 +507,24 @@ static void do_connect(void)
     taskEXIT_CRITICAL();
 
     s_ip_poll_until_ms = 0U;
+#if SPLC_HOST_WIFI_DIAG
+    uint32_t reason_seq0 = st67w611_wifi_reason_get(NULL);
+#endif
+    /* This call blocks up to ~80 s in the worst case (see SPLC_WDG_WIFI_CONNECT_GRACE_MS). */
+    plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_WIFI_CONNECT_GRACE_MS);
     const st67w611_status_t st = meshwf_st67_wifi_switch(cfg.ssid, cfg.password);
 
     if (st == ST67W611_OK) {
         refresh_link();
+#if SPLC_HOST_WIFI_DIAG
+        s_diag_module_streak = 0U;
+#endif
     } else {
         log_warn(TAG, "connect to \"%s\" failed: %s", cfg.ssid, st67w611_status_string(st));
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_DRIVER, 0U);
+#if SPLC_HOST_WIFI_DIAG
+        diag_connect_failed(st, reason_seq0);
+#endif
     }
 
     taskENTER_CRITICAL();
@@ -909,6 +1043,9 @@ void splc_wifi_port_service(uint32_t wait_ms)
         reconnect_check(now_ms());
 #endif
     }
+#if SPLC_HOST_WIFI_DIAG
+    reason_log();
+#endif
     link_log();
 
     /* A scan whose end never arrives must not leave the App waiting forever. */
