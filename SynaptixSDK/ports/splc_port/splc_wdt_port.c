@@ -1,86 +1,106 @@
 /*
- * splc_wdt_port.h - watchdog glue of the meshwf Wi-Fi IO board.
+ * splc_wdt_port.c - see splc_wdt_port.h and docs/SPLC_Watchdog_Design.md.
  *
- * Library side: SynaptixSDK/libs/simple_plc/services/plc_wdt (software supervisor, no HAL).
- * This file: the IWDG (CubeMX handle `hiwdg`), the supervisor task, the reset-cause log and the
- * "NET" channel of the ST67 task. Design: docs/SPLC_Watchdog_Design.md.
- *
- * All of it is compiled out with SPLC_WDG_ENABLE = 0 (default in splcopts.h): nothing in the
- * firmware changes until the option is set to 1 AND the IWDG is configured in CubeMX.
+ * Needs, in CubeMX: IWDG activated (software start), window = maximum (no window mode), handle
+ * `hiwdg` (Core/Inc/iwdg.h). Without that the file does not build with SPLC_WDG_ENABLE = 1.
  */
-#ifndef SPLC_WDT_PORT_H
-#define SPLC_WDT_PORT_H
-
-#include <stdbool.h>
-#include <stdint.h>
-
-#include "splc_opt.h"
-#include "plc_wdt.h"
-
-/* Channel of the ST67 (Wi-Fi) task. */
-#define SPLC_WDT_CH_NET                  PLC_WDT_CH_USER0
-
-/* Longest gap between two passes of the ST67 task loop. The loop also runs the Wi-Fi connect and
- * scan and the MQTT service, which can block for a while: start generous, measure, tighten. */
-#ifndef SPLC_WDG_NET_TIMEOUT_MS
-#define SPLC_WDG_NET_TIMEOUT_MS          45000U
-#endif
-
-/* Extra time for channel NET around st67w611_init() + st67w611_start() (observed ~5.8 s). */
-#ifndef SPLC_WDG_ST67_START_GRACE_MS
-#define SPLC_WDG_ST67_START_GRACE_MS     30000U
-#endif
-
-/* Extra time for channel NET around ONE blocking Wi-Fi connect (splc_wifi_port.c, do_connect).
- * Worst case, from the vendor constants and the facade retry (port: max_transport_retries = 2):
- *   switch: disconnect up to 5 s, then (connect 10 s + wait for the IP 15 s) x 3 attempts = 80 s,
- *   plus 2 x 100 ms retry delay. 95 s leaves ~15 s margin. Only a connect that blocks longer than
- *   this, a real hang, lets the NET channel expire. */
-#ifndef SPLC_WDG_WIFI_CONNECT_GRACE_MS
-#define SPLC_WDG_WIFI_CONNECT_GRACE_MS   95000U
-#endif
-
-/* Extra time for the one light AT query (st67w611_get_mac) the connect diagnostics send to a
- * module that gave no reason: vendor W61_WIFI_TIMEOUT is 6 s, x (no retry in the query) = 6 s. */
-#ifndef SPLC_WDG_WIFI_PROBE_GRACE_MS
-#define SPLC_WDG_WIFI_PROBE_GRACE_MS     15000U
-#endif
-
-/* The supervisor runs in its own task, above the project tasks (SPLC 6, ST67 5) and the vendor
- * tasks (spi_xfer_engine 7, Modem_Process 8), so a spinning task cannot starve it; only the
- * ST67dbg task (20) is higher. Stack in words. */
-#ifndef SPLC_WDG_TASK_PRIO
-#define SPLC_WDG_TASK_PRIO               12U
-#endif
-#ifndef SPLC_WDG_TASK_STACK_WORDS
-#define SPLC_WDG_TASK_STACK_WORDS        512U
-#endif
-
-/* 1 = stop the IWDG counter while the debugger has the core halted (otherwise every breakpoint
- * resets the board). Has no effect without a debugger. */
-#ifndef SPLC_WDG_FREEZE_IN_DEBUG
-#define SPLC_WDG_FREEZE_IN_DEBUG         1
-#endif
+#include "splc_wdt_port.h"
 
 #if SPLC_WDG_ENABLE
 
-/* Registers the kick / fault functions and channel NET. No logging (the logger is not up yet):
- * call from splc_host_start(), BEFORE the tasks are created. */
-void splc_wdt_port_init(void);
+#include "main.h"
+#include "iwdg.h"          /* CubeMX: extern IWDG_HandleTypeDef hiwdg; */
 
-/* Creates the supervisor task. Returns false if the task could not be created. */
-bool splc_wdt_port_start_task(void);
+#include "FreeRTOS.h"
+#include "task.h"
 
-/* Logs the reset cause and the IWDG settings found in `hiwdg`, then clears the reset flags.
- * Needs the logger: call from splc_task after plc_engine_init(). */
-void splc_wdt_port_boot_report(void);
+#include "splc_log.h"
+#include "splc_port.h"      /* SPLC_HOST_WIFI_TASK */
 
-#else  /* no code */
+static const char *TAG = "WDT_PORT";
 
-static inline void splc_wdt_port_init(void) {}
-static inline bool splc_wdt_port_start_task(void) { return true; }
-static inline void splc_wdt_port_boot_report(void) {}
+/* What the supervisor reported last (read with a debugger; the log line is the normal way). */
+static volatile const char *s_fault_name;
+static volatile uint32_t    s_fault_late_ms;
 
+/* The only place that feeds the hardware watchdog. Called from plc_wdt_service() only. */
+static void wdt_kick(void)
+{
+    (void)HAL_IWDG_Refresh(&hiwdg);
+}
+
+/* plc_wdt_service() has already logged the cause. Nothing survives the reset yet (decision on
+ * .noinit / TAMP is open in the design document), so keep it in RAM for a debugger. */
+static void wdt_fault(const char *name, uint32_t late_ms)
+{
+    s_fault_name    = name;
+    s_fault_late_ms = late_ms;
+}
+
+static void wdt_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(SPLC_WDG_SERVICE_MS));
+        plc_wdt_service();
+    }
+}
+
+void splc_wdt_port_init(void)
+{
+#if SPLC_WDG_FREEZE_IN_DEBUG
+    __HAL_DBGMCU_FREEZE_IWDG();   /* counter stops while the debugger halts the core */
 #endif
+    plc_wdt_set_kick_fn(wdt_kick);
+    plc_wdt_set_fault_fn(wdt_fault);
+    /* Channel PLC is registered by plc_engine_init(). Channel NET starts here so that the ST67
+     * task, which is created right after, is covered from its first instruction. */
+#if SPLC_HOST_WIFI_TASK
+    (void)plc_wdt_register(SPLC_WDT_CH_NET, "NET", SPLC_WDG_NET_TIMEOUT_MS, SPLC_WDG_BOOT_GRACE_MS);
+#endif
+}
 
-#endif /* SPLC_WDT_PORT_H */
+bool splc_wdt_port_start_task(void)
+{
+    return xTaskCreate(wdt_task, "WDT", (configSTACK_DEPTH_TYPE)SPLC_WDG_TASK_STACK_WORDS, NULL,
+                       SPLC_WDG_TASK_PRIO, NULL) == pdPASS;
+}
+
+void splc_wdt_port_boot_report(void)
+{
+    /* RCC reset flags. BOR is also set after a power-up. */
+    log_info(TAG, "reset cause: IWDG=%d WWDG=%d SOFT=%d PIN=%d BOR=%d LPWR=%d",
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != 0U),
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST) != 0U),
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST) != 0U),
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != 0U),
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST) != 0U),
+             (int)(__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST) != 0U));
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != 0U) {
+        log_warn(TAG, "the previous run ended with a WATCHDOG RESET");
+    }
+    __HAL_RCC_CLEAR_RESET_FLAGS();
+
+    /* IWDG timeout from the CubeMX values: (reload + 1) * divider / LSI. The prescaler field
+     * holds the register code 0..8 = /4 .. /1024, so divider = 4 << code. LSI_VALUE is the
+     * typical 32 kHz; the real LSI spread is wide, so this is an estimate. */
+    const uint32_t divider = 4UL << hiwdg.Init.Prescaler;
+    const uint32_t est_ms  = (uint32_t)(((uint64_t)(hiwdg.Init.Reload + 1UL) * divider * 1000ULL) / LSI_VALUE);
+    log_info(TAG, "IWDG: prescaler /%u reload %u window 0x%X -> about %u ms (design value %u ms)",
+             (unsigned)divider, (unsigned)hiwdg.Init.Reload, (unsigned)hiwdg.Init.Window,
+             (unsigned)est_ms, (unsigned)SPLC_WDG_HW_TIMEOUT_MS);
+    if (hiwdg.Init.Window != IWDG_WINDOW_DISABLE) {
+        log_error(TAG, "IWDG window mode is on: a kick before the window opens resets the board. "
+                       "Set the window to the maximum in CubeMX");
+    }
+    if ((est_ms * 5UL < (uint32_t)SPLC_WDG_HW_TIMEOUT_MS * 4UL) ||
+        (est_ms * 4UL > (uint32_t)SPLC_WDG_HW_TIMEOUT_MS * 5UL)) {
+        log_warn(TAG, "IWDG timeout differs by more than about 20 percent from SPLC_WDG_HW_TIMEOUT_MS: "
+                      "fix the CubeMX values or the option");
+    }
+    log_info(TAG, "supervisor: service %u ms, channel PLC %u ms, channel NET %u ms, boot grace %u ms",
+             (unsigned)SPLC_WDG_SERVICE_MS, (unsigned)SPLC_WDG_PLC_TIMEOUT_MS,
+             (unsigned)SPLC_WDG_NET_TIMEOUT_MS, (unsigned)SPLC_WDG_BOOT_GRACE_MS);
+}
+
+#endif /* SPLC_WDG_ENABLE */
