@@ -23,7 +23,6 @@
 #include "icache.h"
 #include "iwdg.h"
 #include "usart.h"
-#include "rng.h"
 #include "rtc.h"
 #include "spi.h"
 #include "tim.h"
@@ -112,7 +111,6 @@ int main(void)
   MX_USB_PCD_Init();
   MX_RTC_Init();
   MX_I2C1_Init();
-  MX_RNG_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   MX_IWDG_Init();

@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -119,6 +120,69 @@ static void bus_note(bool ok)
     }
 }
 
+
+/* ------------------------------------------------------------------------ */
+/* TEMPORARY probe: does the RX8130CE have user RAM that survives power loss? */
+/*                                                                           */
+/* MESHWF_RTC_USERRAM_PROBE:                                                 */
+/*   0 = off (default, no behaviour change)                                  */
+/*   1 = READ ONLY: log registers 0x20..0x2F and the VLF flag, write nothing */
+/*   2 = as 1, then if 0x20..0x23 do not hold the test pattern, write it and */
+/*       read it back. After a FULL power cycle (all supplies off, coin cell */
+/*       kept) the next boot logs whether the pattern survived.              */
+/* Remove this block once the question is answered.                          */
+/* ------------------------------------------------------------------------ */
+#ifndef MESHWF_RTC_USERRAM_PROBE
+#define MESHWF_RTC_USERRAM_PROBE 1
+#endif
+
+#if MESHWF_RTC_USERRAM_PROBE
+#define URAM_REG      0x20U
+#define URAM_LEN      4U
+static const uint8_t URAM_PATTERN[URAM_LEN] = { 0xA5U, 0x5AU, 0xC3U, 0x3CU };
+
+static void userram_probe(void)
+{
+    uint8_t d[16];
+    uint8_t flag = 0xFFU;
+
+    if (sx_i2c_mem_read(&s_i2c, RX8130CE_ADDR7, 0x1DU, 1U, &flag, 1U, RX8130CE_I2C_TIMEOUT_MS) != SX_I2C_OK) {
+        log_info(TAG, "URAM probe: cannot read flag register");
+        return;
+    }
+    if (sx_i2c_mem_read(&s_i2c, RX8130CE_ADDR7, URAM_REG, 1U, d, 16U, RX8130CE_I2C_TIMEOUT_MS) != SX_I2C_OK) {
+        log_info(TAG, "URAM probe: cannot read 0x20..0x2F");
+        return;
+    }
+    log_info(TAG, "URAM probe: VLF=%u 0x20..0x23 = %02X %02X %02X %02X | 0x24..0x27 = %02X %02X %02X %02X",
+             (unsigned)((flag >> 1) & 1U), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+    log_info(TAG, "URAM probe: 0x28..0x2F = %02X %02X %02X %02X %02X %02X %02X %02X",
+             d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+
+#if MESHWF_RTC_USERRAM_PROBE >= 2
+    if (memcmp(d, URAM_PATTERN, URAM_LEN) == 0) {
+        log_info(TAG, "URAM probe: PATTERN PRESENT. It survived since the last write "
+                      "(only counts as power-loss proof if every supply was off in between)");
+        return;
+    }
+    uint8_t back[URAM_LEN] = {0};
+    if (sx_i2c_mem_write(&s_i2c, RX8130CE_ADDR7, URAM_REG, 1U, (uint8_t *)URAM_PATTERN, URAM_LEN,
+                         RX8130CE_I2C_TIMEOUT_MS) != SX_I2C_OK ||
+        sx_i2c_mem_read(&s_i2c, RX8130CE_ADDR7, URAM_REG, 1U, back, URAM_LEN,
+                        RX8130CE_I2C_TIMEOUT_MS) != SX_I2C_OK) {
+        log_info(TAG, "URAM probe: write/readback I2C error");
+        return;
+    }
+    if (memcmp(back, URAM_PATTERN, URAM_LEN) == 0) {
+        log_info(TAG, "URAM probe: pattern written and read back OK. Now cut ALL power, wait 1 min, power up");
+    } else {
+        log_info(TAG, "URAM probe: readback %02X %02X %02X %02X != pattern: NOT writable RAM",
+                 back[0], back[1], back[2], back[3]);
+    }
+#endif
+}
+#endif /* MESHWF_RTC_USERRAM_PROBE */
+
 /* ------------------------------------------------------------------------ */
 /* Chip bring-up                                                             */
 /* ------------------------------------------------------------------------ */
@@ -130,6 +194,13 @@ static bool try_init(void)
     const int rc = rx8130ce_init(&s_rtc, &s_i2c);
     if (rc == RX8130CE_OK) {
         log_info(TAG, "RX8130CE ready");
+#if MESHWF_RTC_USERRAM_PROBE
+        static bool s_probed;
+        if (!s_probed) {
+            s_probed = true;
+            userram_probe();
+        }
+#endif
         return true;
     }
     log_warn(TAG, "RX8130CE init failed (%d, i2c %d), retry in %u s", rc, s_rtc.last_i2c_err,
