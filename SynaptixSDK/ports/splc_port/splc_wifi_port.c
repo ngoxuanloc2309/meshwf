@@ -6,6 +6,7 @@
 
 #if SPLC_WIFI_ENABLE
 
+#include <stdio.h>
 #include <string.h>
 
 #include "FreeRTOS.h"
@@ -13,6 +14,7 @@
 
 #include "st67w611.h"
 #include "st67w611_wifi_switch.h"
+#include "st67w611_soft_reset.h"     /* AT+RST of the module (no EN pin on this board) */
 #include "plc_wifi.h"
 #include "splc_log.h"
 #include "splc_wdt_port.h"            /* channel NET: grace around the blocking connect */
@@ -67,10 +69,34 @@ static const char *TAG = "SPLC_WIFI";
  * like the ENVIRONMENT (wrong SSID / password, weak signal, no antenna: the module answered with a
  * reason that points outside the board), the MODULE (it answered with an internal failure, or it
  * did not answer a light AT query at all) or UNKNOWN; also log every reason event of the module
- * (it explains dropped links too). Counters only: nothing is reset or retried differently.
+ * (it explains dropped links too). Counters and log only, EXCEPT the MODULE case: see
+ * SPLC_HOST_WIFI_MODULE_RESET_STREAK below (soft reset of the ST67).
  * 0 = no extra code, no log. */
 #ifndef SPLC_HOST_WIFI_DIAG
 #define SPLC_HOST_WIFI_DIAG             1
+#endif
+
+/* Reset the ST67 itself when reconnecting fails because of the MODULE (not the radio link / AP):
+ * SPLC_HOST_WIFI_MODULE_RESET_STREAK MODULE-class connect failures in a row (see
+ * diag_connect_failed) trigger one soft reset (AT+RST, meshwf_st67_soft_reset). 0 = never.
+ * Needs SPLC_HOST_WIFI_DIAG = 1 (it provides the classification). MIN_MS = shortest gap between
+ * two reset attempts, so a module that cannot be recovered is not hammered. */
+#ifndef SPLC_HOST_WIFI_MODULE_RESET_STREAK
+#define SPLC_HOST_WIFI_MODULE_RESET_STREAK   3U
+#endif
+#ifndef SPLC_HOST_WIFI_MODULE_RESET_MIN_MS
+#define SPLC_HOST_WIFI_MODULE_RESET_MIN_MS   60000U
+#endif
+
+/* FAST CHECK: while the link is down the worker does not wait for connects to fail (each can block
+ * up to ~80 s). On the first idle link check of an outage (<= SPLC_HOST_WIFI_LINK_CHECK_MS after the
+ * drop) it asks the module a light AT question (get_mac, 6 s timeout) up to
+ * SPLC_HOST_WIFI_FAST_PROBE_COUNT times. If NONE is answered the module is hung and is soft-reset
+ * at once. Time to the decision: <= LINK_CHECK_MS + COUNT x 6 s = 10 + 2 x 6 = 22 s (default).
+ * 0 = off (only the slow path above: MODULE_RESET_STREAK failed connects in a row).
+ * Needs SPLC_HOST_WIFI_DIAG = 1 and SPLC_HOST_WIFI_RECONNECT = 1. */
+#ifndef SPLC_HOST_WIFI_FAST_PROBE_COUNT
+#define SPLC_HOST_WIFI_FAST_PROBE_COUNT      2U
 #endif
 
 /* Work for the ST67 task. Set by the engine-side callbacks / events, cleared by the worker. */
@@ -445,6 +471,116 @@ static void reason_log(void)
     }
 }
 
+static uint16_t s_module_resets;       /* soft resets that finished OK, worker only */
+static uint16_t s_module_reset_fails;  /* soft resets that failed (module hung hard), worker only */
+static uint32_t s_module_reset_next_ms;/* earliest next attempt, 0 = at once */
+
+/* Worker only. Soft-resets the ST67 (AT+RST) unless one was tried less than MIN_MS ago. `why` goes
+ * to the log. Returns true when the reset finished OK.
+ *
+ * LIMIT (no EN pin on this board): AT+RST needs a module that still answers AT commands. A module
+ * that is hung hard usually does not, so the reset fails, the facade stays retry-safe (state ERROR)
+ * and it is tried again after MIN_MS. Only EN or a power switch controlled by the MCU recovers that
+ * case. On success the facade posts READY, which the event handler turns into s_rejoin_pending:
+ * the network is rejoined without more code here. */
+static bool module_reset_now(const char *why) __attribute__((unused));
+static bool module_reset_now(const char *why)
+{
+    const uint32_t now = now_ms();
+    if (s_module_reset_next_ms != 0U && !time_reached(now, s_module_reset_next_ms)) {
+        return false;
+    }
+
+    log_warn(TAG, "%s: soft-resetting the ST67 (done %u, failed %u so far)", why,
+             (unsigned)s_module_resets, (unsigned)s_module_reset_fails);
+    plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_ST67_RESET_GRACE_MS);
+    const st67w611_status_t rs = meshwf_st67_soft_reset();
+
+    s_module_reset_next_ms = now_ms() + SPLC_HOST_WIFI_MODULE_RESET_MIN_MS;
+    if (s_module_reset_next_ms == 0U) { s_module_reset_next_ms = 1U; }
+
+    if (rs == ST67W611_OK) {
+        if (s_module_resets < 0xFFFFU) { s_module_resets++; }
+        s_diag_module_streak = 0U;             /* judge the module again from scratch */
+        log_info(TAG, "ST67 soft reset OK: the network is rejoined after READY");
+        return true;
+    }
+    if (s_module_reset_fails < 0xFFFFU) { s_module_reset_fails++; }
+    log_warn(TAG, "ST67 soft reset FAILED: %s (module hung hard? next try in %lu s)",
+             st67w611_status_string(rs), (unsigned long)(SPLC_HOST_WIFI_MODULE_RESET_MIN_MS / 1000U));
+    return false;
+}
+
+/* SLOW path: worker only, right after a connect failed with class MODULE. */
+static void module_reset_check(void)
+{
+#if SPLC_HOST_WIFI_MODULE_RESET_STREAK > 0U
+    if (s_diag_module_streak >= (uint16_t)SPLC_HOST_WIFI_MODULE_RESET_STREAK) {
+        char why[40];
+        (void)snprintf(why, sizeof(why), "module fault x%u in a row", (unsigned)s_diag_module_streak);
+        (void)module_reset_now(why);
+    }
+#endif
+}
+
+#if SPLC_HOST_WIFI_FAST_PROBE_COUNT > 0U
+static uint32_t s_outage_reason_seq0;  /* reason sequence when the current outage was noticed */
+static bool     s_fast_logged;         /* "module answers" printed once per outage */
+
+/* FAST path: worker only, from reconnect_check while the link is DOWN and nothing else is running.
+ * Returns true when it reset the module OK (the caller leaves the pass: the rejoin comes with READY).
+ *
+ * How the fault is told apart:
+ *   - get_mac answered           -> the module is ALIVE: a failure is the AP / radio / password (or
+ *                                   a slow module). No reset here; the connect retries go on and the
+ *                                   slow path still watches for internal failures.
+ *   - get_mac NOT answered (x N) -> the module is HUNG (not Wi-Fi related): reset it now.
+ *   - BUSY / INVALID_STATE / NOT_READY / NOT_INITIALIZED -> not a verdict: try again next check.
+ * The last module reason (why a join failed / link dropped) is only logged, to see the cause. */
+static bool fast_module_check(void)
+{
+    if (s_module_reset_next_ms != 0U && !time_reached(now_ms(), s_module_reset_next_ms)) {
+        return false;                          /* reset tried a moment ago: do not probe a hung module */
+    }
+
+    bool answered = false;
+    st67w611_status_t ps = ST67W611_OK;
+    uint8_t tries = 0U;
+    for (uint8_t i = 0U; i < (uint8_t)SPLC_HOST_WIFI_FAST_PROBE_COUNT && !answered; i++) {
+        uint8_t mac[6];
+        plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_WIFI_PROBE_GRACE_MS);
+        ps = st67w611_get_mac(mac);
+        tries++;
+        answered = (ps == ST67W611_OK);
+        if (ps == ST67W611_ERR_BUSY || ps == ST67W611_ERR_INVALID_STATE ||
+            ps == ST67W611_ERR_NOT_READY || ps == ST67W611_ERR_NOT_INITIALIZED) {
+            return false;                      /* refused before it reached the module: no verdict */
+        }
+    }
+
+    uint32_t code = 0U;
+    const uint32_t seq = st67w611_wifi_reason_get(&code);
+    const bool got_reason = (seq != s_outage_reason_seq0);
+
+    if (answered) {
+        if (!s_fast_logged) {
+            s_fast_logged = true;
+            log_info(TAG, "fast check: module answers AT, last reason=%s(%u) class=%s: not a module hang",
+                     got_reason ? st67w611_wifi_reason_string(code) : "none",
+                     got_reason ? (unsigned)code : 0U,
+                     got_reason ? class_name(classify_reason(code)) : "-");
+        }
+        return false;
+    }
+
+    log_warn(TAG, "fast check: module did not answer %u AT probe(s) (%s), last reason=%s(%u): ST67 hung",
+             (unsigned)tries, st67w611_status_string(ps),
+             got_reason ? st67w611_wifi_reason_string(code) : "none",
+             got_reason ? (unsigned)code : 0U);
+    return module_reset_now("module hung");
+}
+#endif /* SPLC_HOST_WIFI_FAST_PROBE_COUNT */
+
 /* Worker only, right after a FAILED connect. `seq0` = reason sequence before the connect. */
 static void diag_connect_failed(st67w611_status_t st, uint32_t seq0)
 {
@@ -493,6 +629,10 @@ static void diag_connect_failed(st67w611_status_t st, uint32_t seq0)
              (unsigned)(seq - seq0), st67w611_status_string(st), probe,
              (unsigned)s_diag_env, (unsigned)s_diag_module, (unsigned)s_diag_unknown,
              (unsigned)s_diag_module_streak);
+
+    if (cls == FAIL_MODULE) {
+        module_reset_check();                  /* the module is at fault, not the link: reset it */
+    }
 }
 #endif /* SPLC_HOST_WIFI_DIAG */
 
@@ -914,6 +1054,10 @@ static void reconnect_check(uint32_t now)
 
     if (s_down_since_ms == 0U) {
         s_down_since_ms = (now != 0U) ? now : 1U;
+#if SPLC_HOST_WIFI_DIAG && SPLC_HOST_WIFI_FAST_PROBE_COUNT > 0U
+        s_outage_reason_seq0 = st67w611_wifi_reason_get(NULL);   /* reasons before this are old news */
+        s_fast_logged        = false;
+#endif
     }
     if (conn == PLC_WIFI_CONN_CONNECTING) {
         return;                                /* someone is already joining */
@@ -933,6 +1077,21 @@ static void reconnect_check(uint32_t now)
     if (!s_ready || s_connecting || s_cmd != 0U || s_scan_state == PLC_WIFI_SCAN_SCANNING) {
         return;
     }
+#if SPLC_HOST_WIFI_DIAG && SPLC_HOST_WIFI_FAST_PROBE_COUNT > 0U
+    /* Link down and idle: ask the module BEFORE a connect that a hung module cannot answer. Only
+     * when the App wants the link and allows Auto-Reconnect (same rule as the connect below). */
+    if (conn == PLC_WIFI_CONN_DISCONNECTED) {
+        bool wanted;
+        taskENTER_CRITICAL();
+        wanted = s_want_link && s_cfg.ssid[0] != '\0' &&
+                 (s_cfg.control_flags & PLC_WIFI_CTRL_ENABLE) != 0U &&
+                 (s_cfg.control_flags & PLC_WIFI_CTRL_AUTO_RECONNECT) != 0U;
+        taskEXIT_CRITICAL();
+        if (wanted && fast_module_check()) {
+            return;                            /* module reset: it is rejoined after READY */
+        }
+    }
+#endif
     if (s_recon_next_ms != 0U && !time_reached(now, s_recon_next_ms)) {
         return;
     }

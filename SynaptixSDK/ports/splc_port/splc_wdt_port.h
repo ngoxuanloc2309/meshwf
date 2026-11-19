@@ -40,6 +40,13 @@
 #define SPLC_WDG_WIFI_CONNECT_GRACE_MS   95000U
 #endif
 
+/* Extra time for channel NET around ONE soft reset (AT+RST) of the ST67 (meshwf_st67_soft_reset).
+ * The facade reset timeout is 3 s per step and the module needs ~6 s to boot (init+start observed
+ * ~5.8 s); 30 s keeps a wide margin and still lets a real hang expire the channel. */
+#ifndef SPLC_WDG_ST67_RESET_GRACE_MS
+#define SPLC_WDG_ST67_RESET_GRACE_MS     30000U
+#endif
+
 /* Extra time for the one light AT query (st67w611_get_mac) the connect diagnostics send to a
  * module that gave no reason: vendor W61_WIFI_TIMEOUT is 6 s, x (no retry in the query) = 6 s. */
 #ifndef SPLC_WDG_WIFI_PROBE_GRACE_MS
