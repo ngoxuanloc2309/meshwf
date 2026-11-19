@@ -14,6 +14,9 @@ set(SPLC_OPTS_DIR "${CMAKE_CURRENT_LIST_DIR}/../ports/splc_port" CACHE PATH
     "Directory containing the product's splcopts.h" FORCE)
 add_subdirectory(simple_plc)
 
+# libs/st67w611/inc/logging_config.h reads MESHWF_ST67_LOG_LEVEL from splcopts.h.
+target_include_directories(st67w611 PRIVATE "${SPLC_OPTS_DIR}")
+
 # libs/nanomodbus (host copy) is not used yet: SimplePLC links its own renamed
 # splc_nanomodbus. Add it here when the board needs a Modbus master of its own.
 

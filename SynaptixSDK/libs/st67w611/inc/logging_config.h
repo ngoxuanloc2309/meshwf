@@ -39,11 +39,17 @@ extern "C" {
 
 /** Global verbosity level (LOG_NONE, LOG_ERROR, LOG_WARN, LOG_INFO, LOG_DEBUG).
  * Compile-time: a Log*() call above this level is removed with its string (saves Flash).
- * MESHWF_ST67_LOG_LEVEL = LOG_DEBUG is the value used before this option existed (same code
- * generated). Vendor messages reach the console through st67_vendor_log_out()
+ * Set MESHWF_ST67_LOG_LEVEL in the product's splcopts.h (ports/splc_port) or with a compiler
+ * flag. When it is not set the level is LOG_DEBUG, the value used before this option existed
+ * (same code generated). Vendor messages reach the console through st67_vendor_log_out()
  * ("vendor: ..." lines in splc_port.c). */
+#if defined(__has_include)
+#if __has_include("splcopts.h")
+#include "splcopts.h"
+#endif
+#endif
 #ifndef MESHWF_ST67_LOG_LEVEL
-#define MESHWF_ST67_LOG_LEVEL                   LOG_WARN
+#define MESHWF_ST67_LOG_LEVEL                   LOG_DEBUG
 #endif
 #define LOG_LEVEL                               MESHWF_ST67_LOG_LEVEL
 

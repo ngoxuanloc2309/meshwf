@@ -112,7 +112,7 @@ void splc_indicators_port_init(void)
     {
         static const char *const name[SPLC_LED_COUNT] = { "POWER (PC15)", "STATUS (PC14)", "LINK (PC13)" };
         for (unsigned i = 0U; i < (unsigned)SPLC_LED_COUNT; i++) {
-            log_info(TAG, "LED test: %s on", name[i]);
+            log_debug(TAG, "LED test: %s on", name[i]);
             led_set((SPLC_LED_ID)i, true, NULL);
             vTaskDelay(pdMS_TO_TICKS(SPLC_IND_SELFTEST_MS));
             led_set((SPLC_LED_ID)i, false, NULL);
@@ -120,7 +120,7 @@ void splc_indicators_port_init(void)
     }
 #endif
     /* Pin state as the hardware has it: MODER bits 27:26 / 29:28 / 31:30 = 01 means output. */
-    log_info(TAG, "GPIOC MODER=0x%08lX ODR=0x%04lX (PC13..15 expect MODER 01 each)",
+    log_debug(TAG, "GPIOC MODER=0x%08lX ODR=0x%04lX (PC13..15 expect MODER 01 each)",
              (unsigned long)GPIOC->MODER, (unsigned long)GPIOC->ODR);
 
     if (!splc_indicator_init(&ops)) {
@@ -153,7 +153,7 @@ void splc_indicators_port_init(void)
     }
 #endif
 
-    log_info(TAG, "GPIOC ODR after init=0x%04lX (POWER lit: PC15 bit = %s)", (unsigned long)GPIOC->ODR,
+    log_debug(TAG, "GPIOC ODR after init=0x%04lX (POWER lit: PC15 bit = %s)", (unsigned long)GPIOC->ODR,
              SPLC_IND_LED_ACTIVE_LOW ? "0" : "1");
     log_info(TAG, "indicator ready (POWER PC15, STATUS PC14, LINK PC13, active %s)",
              SPLC_IND_LED_ACTIVE_LOW ? "low" : "high");

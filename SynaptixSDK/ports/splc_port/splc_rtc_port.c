@@ -246,7 +246,7 @@ static int hook_tz_load(void *ctx, int16_t *tz_offset_min)
         return -1;
     }
     const bool ok = splc_tzmem_decode(raw, tz_offset_min);
-    log_info(TAG, "tz memory 0x20..0x23 = %02X %02X %02X %02X -> %s",
+    log_debug(TAG, "tz memory 0x20..0x23 = %02X %02X %02X %02X -> %s",
              raw[0], raw[1], raw[2], raw[3], ok ? "valid" : "empty/invalid");
     return ok ? 1 : 0;
 }

@@ -44,9 +44,10 @@ extern "C" {
 #endif
 
 /* Bring-up aid: log FreeRTOS heap (free / minimum ever) and the Wi-Fi task's stack
- * headroom every this many ms from the Wi-Fi task. 0 = off. */
+ * headroom every this many ms from the Wi-Fi task. 0 = off (default; set it in splcopts.h to
+ * turn it on, for example 30000U). */
 #ifndef SPLC_HOST_HEAP_LOG_MS
-#define SPLC_HOST_HEAP_LOG_MS        30000U
+#define SPLC_HOST_HEAP_LOG_MS        0U
 #endif
 
 /* Creates the tasks. Returns false (and logs) when a task cannot be created. */

@@ -86,7 +86,7 @@ void splc_wdt_port_boot_report(void)
      * typical 32 kHz; the real LSI spread is wide, so this is an estimate. */
     const uint32_t divider = 4UL << hiwdg.Init.Prescaler;
     const uint32_t est_ms  = (uint32_t)(((uint64_t)(hiwdg.Init.Reload + 1UL) * divider * 1000ULL) / LSI_VALUE);
-    log_info(TAG, "IWDG: prescaler /%u reload %u window 0x%X -> about %u ms (design value %u ms)",
+    log_debug(TAG, "IWDG: prescaler /%u reload %u window 0x%X -> about %u ms (design value %u ms)",
              (unsigned)divider, (unsigned)hiwdg.Init.Reload, (unsigned)hiwdg.Init.Window,
              (unsigned)est_ms, (unsigned)SPLC_WDG_HW_TIMEOUT_MS);
     if (hiwdg.Init.Window != IWDG_WINDOW_DISABLE) {

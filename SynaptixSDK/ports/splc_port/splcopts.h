@@ -36,6 +36,10 @@
  * strings to save Flash, and the level is fixed at build time. 0 = run-time filter only (as before).
  * Does not affect libs/st67w611, which has its own logger. */
 #define SPLC_LOG_COMPILE_FILTER       1
+/* ST67 vendor driver log level (libs/st67w611/inc/logging_config.h): LOG_NONE, LOG_ERROR, LOG_WARN,
+ * LOG_INFO or LOG_DEBUG. Compile-time: calls above this level are removed with their strings.
+ * Not defined = LOG_DEBUG (as before). */
+#define MESHWF_ST67_LOG_LEVEL         LOG_ERROR
 
 /* Clock: external RTC IC on I2C1 (decision 57). The hooks are registered by
  * the product glue (ports/splc_port) before plc_engine_init(). */
