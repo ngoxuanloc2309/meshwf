@@ -37,8 +37,15 @@ extern "C" {
  * Middlewares\ST\ST67W6X_Network_Driver\Conf\logging_config_template.h
  */
 
-/** Global verbosity level (LOG_NONE, LOG_ERROR, LOG_WARN, LOG_INFO, LOG_DEBUG) */
-#define LOG_LEVEL                               LOG_DEBUG
+/** Global verbosity level (LOG_NONE, LOG_ERROR, LOG_WARN, LOG_INFO, LOG_DEBUG).
+ * Compile-time: a Log*() call above this level is removed with its string (saves Flash).
+ * MESHWF_ST67_LOG_LEVEL = LOG_DEBUG is the value used before this option existed (same code
+ * generated). Vendor messages reach the console through st67_vendor_log_out()
+ * ("vendor: ..." lines in splc_port.c). */
+#ifndef MESHWF_ST67_LOG_LEVEL
+#define MESHWF_ST67_LOG_LEVEL                   LOG_WARN
+#endif
+#define LOG_LEVEL                               MESHWF_ST67_LOG_LEVEL
 
 /** Enable 'task name' metadata in the log */
 #define LOG_INCLUDE_TASKNAME                    1

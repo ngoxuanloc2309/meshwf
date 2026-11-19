@@ -30,8 +30,12 @@
 #define PLC_SCAN_INTERVAL_MS          10U
 #define PLC_PVD_EMERGENCY_SAVE_ENABLE 1
 
-/* Logging (LPUART1) */
-#define SPLC_LOG_LEVEL                4
+/* Logging (LPUART1). SPLC_LOG_LEVEL: 0 OFF, 1 ERROR, 2 WARN, 3 INFO, 4 DEBUG. */
+#define SPLC_LOG_LEVEL                3
+/* 1 = compile-time filter (config/splc_log.h): log calls above SPLC_LOG_LEVEL are removed with their
+ * strings to save Flash, and the level is fixed at build time. 0 = run-time filter only (as before).
+ * Does not affect libs/st67w611, which has its own logger. */
+#define SPLC_LOG_COMPILE_FILTER       1
 
 /* Clock: external RTC IC on I2C1 (decision 57). The hooks are registered by
  * the product glue (ports/splc_port) before plc_engine_init(). */
