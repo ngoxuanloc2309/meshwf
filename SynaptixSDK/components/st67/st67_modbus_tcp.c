@@ -38,6 +38,11 @@ enum { X_IDLE = 0, X_REQ_READY, X_REQ_TAKEN, X_RSP_READY };
 static client_t              s_cl[ST67_MBTCP_MAX_CLIENTS];
 static bool                (*s_link_up)(void);
 static volatile int32_t      s_listener = -1;
+/* A listener socket whose Shutdown failed (typically: the Wi-Fi was already down, so the
+ * AT+CIPSERVER=0 never reached the module). The driver keeps it in its socket table and the
+ * module may still run the server, so it must be released with another Shutdown before a new
+ * listener is opened. W6X_Net_Close() cannot do it: it only acts on CONNECTED sockets. */
+static volatile int32_t      s_stale_ls = -1;
 static QueueHandle_t         s_q_new;           /* socket ids accepted, waiting for the I/O task */
 static TaskHandle_t          s_io_task;
 
@@ -278,6 +283,13 @@ static void teardown(void)
         const int32_t r = W6X_Net_Shutdown(ls, 1);
         log_info(TAG, "listener %d shutdown -> %d", (int)ls, (int)r);
         s_listener = -1;
+        if (r != 0) {
+            taskENTER_CRITICAL();
+            s_stale_ls = ls;                   /* released later, before the next listen */
+            taskEXIT_CRITICAL();
+            log_warn(TAG, "listener %d not released (%d): it is retried when the link is back",
+                     (int)ls, (int)r);
+        }
     }
 }
 
@@ -338,6 +350,42 @@ static void io_task(void *arg)
 /* Accept task                                                                                */
 /* ---------------------------------------------------------------------------------------- */
 
+/* Stops the server and frees the driver socket. true = released. A failed release is kept in
+ * s_stale_ls so the next call retries it instead of opening one more socket. */
+static bool release_listener(int32_t ls)
+{
+    const int32_t r = W6X_Net_Shutdown(ls, 1);
+    if (r == 0) {
+        return true;
+    }
+    log_warn(TAG, "listener %d shutdown failed (%d)", (int)ls, (int)r);
+    taskENTER_CRITICAL();
+    s_stale_ls = ls;
+    taskEXIT_CRITICAL();
+    return false;
+}
+
+/* Frees the listener left behind by a failed teardown. true = nothing stale any more. */
+static bool release_stale_listener(void)
+{
+    taskENTER_CRITICAL();
+    const int32_t ls = s_stale_ls;
+    taskEXIT_CRITICAL();
+    if (ls < 0) {
+        return true;
+    }
+    if (W6X_Net_Shutdown(ls, 1) != 0) {
+        return false;
+    }
+    taskENTER_CRITICAL();
+    if (s_stale_ls == ls) {
+        s_stale_ls = -1;
+    }
+    taskEXIT_CRITICAL();
+    log_info(TAG, "stale listener %d released", (int)ls);
+    return true;
+}
+
 static int32_t open_listener(void)
 {
     const int32_t s = W6X_Net_Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -359,13 +407,13 @@ static int32_t open_listener(void)
 
     if (W6X_Net_Bind(s, (const struct sockaddr *)&addr, (socklen_t)sizeof(addr)) != 0) {
         log_warn(TAG, "W6X_Net_Bind failed");
-        (void)W6X_Net_Close(s);
+        (void)release_listener(s);             /* Close() ignores a socket that is not CONNECTED */
         return -1;
     }
     /* sends AT+CIPSERVERMAXCONN=<n> and AT+CIPSERVER=1,<port>,"TCP" */
     if (W6X_Net_Listen(s, (int32_t)ST67_MBTCP_MAX_CLIENTS) != 0) {
         log_warn(TAG, "W6X_Net_Listen failed (firmware or no free connection)");
-        (void)W6X_Net_Close(s);
+        (void)release_listener(s);             /* Close() would leak this BIND socket */
         return -1;
     }
     return s;
@@ -375,6 +423,8 @@ static void accept_task(void *arg)
 {
     (void)arg;
     bool stack_logged = false;
+    uint8_t fail_streak = 0U;                  /* open_listener() failures in a row */
+    uint8_t stale_tries = 0U;
 
     for (;;) {
         if (s_link_up == NULL || !s_link_up()) {
@@ -382,11 +432,27 @@ static void accept_task(void *arg)
             continue;
         }
 
-        const int32_t ls = open_listener();
-        if (ls < 0) {
+        if (!release_stale_listener()) {       /* never open a new socket on top of a leaked one */
+            if (++stale_tries >= 12U) {        /* ~1 min of 5 s tries */
+                stale_tries = 0U;
+                log_warn(TAG, "listener still not released: the ST67 may need a reset");
+            }
             vTaskDelay(pdMS_TO_TICKS(5000U));
             continue;
         }
+        stale_tries = 0U;
+
+        const int32_t ls = open_listener();
+        if (ls < 0) {
+            if (fail_streak < 0xFFU) {
+                fail_streak++;
+            }
+            /* 5 s, then 10, 20, 40, 60 s: each try sends AT commands to the module. */
+            const uint32_t wait = (fail_streak >= 5U) ? 60000U : (5000U << (fail_streak - 1U));
+            vTaskDelay(pdMS_TO_TICKS(wait > 60000U ? 60000U : wait));
+            continue;
+        }
+        fail_streak = 0U;
         s_listener = ls;
         log_info(TAG, "Modbus TCP slave listening on port %u (max %u clients)",
                  (unsigned)ST67_MBTCP_PORT, (unsigned)ST67_MBTCP_MAX_CLIENTS);
@@ -436,6 +502,7 @@ bool st67_modbus_tcp_create(modbus_transport_t *out, bool (*link_up)(void))
         s_cl[i].sock = -1;
     }
     s_listener = -1;
+    s_stale_ls = -1;
     s_x_state = X_IDLE;
 
     s_q_new = xQueueCreate(ST67_MBTCP_MAX_CLIENTS, sizeof(int32_t));

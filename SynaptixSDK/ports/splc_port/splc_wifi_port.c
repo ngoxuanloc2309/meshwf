@@ -99,6 +99,62 @@ static const char *TAG = "SPLC_WIFI";
 #define SPLC_HOST_WIFI_FAST_PROBE_COUNT      2U
 #endif
 
+/* SMART RECONNECT: retry the link at a fixed period and reset the ST67 on module-side failures.
+ *
+ * While the link is down (and the App wants it up) the worker reconnects every
+ * SPLC_HOST_WIFI_SMART_PERIOD_MS (fixed, no back-off; the real period is this pause PLUS the time
+ * the failed connect blocks, and the idle link check runs every SPLC_HOST_WIFI_LINK_CHECK_MS, so it
+ * is never shorter than that). Every failed connect is judged by the reason the module reported:
+ *   - reason says SSID or password / security (user configuration, see smart_is_config_reason):
+ *     the user fixes it, a reset cannot help -> NO reset, keep retrying;
+ *   - any other reason, or no reason at all (the module said nothing): treated as a module-side
+ *     fault; after SPLC_HOST_WIFI_SMART_RETRIES such failures in a row the ST67 is soft-reset
+ *     (module_reset_now: watchdog grace, MODULE_RESET_MIN_MS rule) and then rejoins by itself.
+ * A connect refused before it reached the module (BUSY, bad argument, wrong state) is not counted.
+ * A configuration-reason failure restarts the count. After a reset that did not bring the link
+ * back, the minimum gap to the next smart reset doubles (SPLC_HOST_WIFI_SMART_GAP_MS up to
+ * SPLC_HOST_WIFI_SMART_GAP_MAX_MS; set MAX = GAP for a fixed gap), so a weak signal is not reset
+ * over and over. Everything starts again when the IP is back or the App sends a new CONNECT.
+ * Limit: a module that is stuck but keeps reporting an SSID / password reason is NOT reset.
+ * Also logs how long each failed connect took. Does not cover the compiled-in default network.
+ * 0 = no extra code, no extra log, the old reconnect (SPLC_HOST_WIFI_RECONNECT_MS, back-off).
+ * Needs SPLC_HOST_WIFI_DIAG = 1 and SPLC_HOST_WIFI_RECONNECT = 1 (off by default if either is 0,
+ * an error if forced to 1 then). */
+#ifndef SPLC_HOST_WIFI_SMART_RESET
+#if SPLC_HOST_WIFI_DIAG && SPLC_HOST_WIFI_RECONNECT
+#define SPLC_HOST_WIFI_SMART_RESET      1
+#else
+#define SPLC_HOST_WIFI_SMART_RESET      0
+#endif
+#endif
+#ifndef SPLC_HOST_WIFI_SMART_PERIOD_MS
+#define SPLC_HOST_WIFI_SMART_PERIOD_MS  10000U
+#endif
+#ifndef SPLC_HOST_WIFI_SMART_RETRIES
+#define SPLC_HOST_WIFI_SMART_RETRIES    3U
+#endif
+#ifndef SPLC_HOST_WIFI_SMART_GAP_MS
+#define SPLC_HOST_WIFI_SMART_GAP_MS     60000U
+#endif
+#ifndef SPLC_HOST_WIFI_SMART_GAP_MAX_MS
+#define SPLC_HOST_WIFI_SMART_GAP_MAX_MS 600000U
+#endif
+#if SPLC_HOST_WIFI_SMART_RESET && !(SPLC_HOST_WIFI_DIAG && SPLC_HOST_WIFI_RECONNECT)
+#error "SPLC_HOST_WIFI_SMART_RESET needs SPLC_HOST_WIFI_DIAG = 1 and SPLC_HOST_WIFI_RECONNECT = 1"
+#endif
+#if SPLC_HOST_WIFI_SMART_RESET && (SPLC_HOST_WIFI_SMART_RETRIES < 1U)
+#error "SPLC_HOST_WIFI_SMART_RETRIES must be >= 1"
+#endif
+#if SPLC_HOST_WIFI_SMART_RESET && (SPLC_HOST_WIFI_SMART_GAP_MAX_MS < SPLC_HOST_WIFI_SMART_GAP_MS)
+#error "SPLC_HOST_WIFI_SMART_GAP_MAX_MS must be >= SPLC_HOST_WIFI_SMART_GAP_MS"
+#endif
+/* Pause between two reconnects at the start of an outage. */
+#if SPLC_HOST_WIFI_SMART_RESET
+#define SPLC_RECON_BASE_MS              SPLC_HOST_WIFI_SMART_PERIOD_MS
+#else
+#define SPLC_RECON_BASE_MS              SPLC_HOST_WIFI_RECONNECT_MS
+#endif
+
 /* Work for the ST67 task. Set by the engine-side callbacks / events, cleared by the worker. */
 #define CMD_CONNECT     0x01U
 #define CMD_DISCONNECT  0x02U
@@ -161,7 +217,7 @@ static uint32_t              s_ip_poll_next_ms;
 static uint32_t              s_mac_next_ms;
 #if SPLC_HOST_WIFI_RECONNECT
 static uint32_t              s_recon_next_ms;     /* earliest next reconnect, 0 = at once */
-static uint32_t              s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+static uint32_t              s_recon_pause_ms = SPLC_RECON_BASE_MS;
 static uint32_t              s_down_since_ms;     /* start of the current outage, 0 = link up */
 static uint16_t              s_fail_streak;       /* failed reconnects since the link was last up */
 static uint32_t              s_noip_since_ms;     /* CONNECTED without IP since, 0 = not in that state */
@@ -419,6 +475,28 @@ static uint16_t s_diag_module;
 static uint16_t s_diag_unknown;
 static uint16_t s_diag_module_streak;  /* MODULE failures in a row, cleared by ENV or by a success */
 
+#if SPLC_HOST_WIFI_SMART_RESET
+/* What the LAST failed connect looked like, written by diag_connect_failed, read by
+ * smart_note_failure right after do_connect. Worker only. */
+static bool     s_smart_valid;         /* diag_connect_failed ran for the connect just made */
+static bool     s_smart_counted;       /* the connect reached the module (not refused up front) */
+static bool     s_smart_has_reason;    /* the module sent a reason event during that connect */
+static bool     s_smart_cfg;           /* ... and it points to the SSID / password */
+static uint32_t s_smart_code;          /* that reason code (valid when s_smart_has_reason) */
+
+/* WLAN_FW_* reason codes that mean "the user typed something wrong": a reset cannot fix them.
+ *   2  AUTHENTICATION_FAILURE        password / security rejected
+ *   8  4WAY_HANDSHAKE_PSK_TIMEOUT    wrong password (also weak signal)
+ *   12 SCAN_NO_BSSID_AND_CHANNEL     SSID not seen (also router off)
+ *   17 NETWORK_SECURITY_NOMATCH      security type differs from the AP's
+ *   18 NETWORK_WEPLEN_ERROR          wrong WEP key length
+ * Chosen from the code NAMES; not measured on the board yet (see classify_reason). */
+static bool smart_is_config_reason(uint32_t code)
+{
+    return (code == 2U) || (code == 8U) || (code == 12U) || (code == 17U) || (code == 18U);
+}
+#endif
+
 /* Policy table: WLAN_FW_* reason codes (vendor w6x_types.h, W6X_WIFI_LIST) -> class.
  * Decided from the NAMES of the codes only; it has NOT been measured on the board yet. Run the
  * test matrix (router off, wrong password, wrong SSID, antenna removed, far away) and move codes
@@ -589,11 +667,17 @@ static void diag_connect_failed(st67w611_status_t st, uint32_t seq0)
     const bool got_reason = (seq != seq0);
     const char *probe = "-";
     fail_class_t cls;
+#if SPLC_HOST_WIFI_SMART_RESET
+    bool refused = false;
+#endif
 
     if (st == ST67W611_ERR_BUSY || st == ST67W611_ERR_INVALID_ARG ||
         st == ST67W611_ERR_INVALID_STATE || st == ST67W611_ERR_NOT_READY ||
         st == ST67W611_ERR_NOT_INITIALIZED) {
         cls = FAIL_UNKNOWN;                    /* refused before any radio work: not a link failure */
+#if SPLC_HOST_WIFI_SMART_RESET
+        refused = true;
+#endif
     } else if (got_reason) {
         cls = classify_reason(code);           /* the module answered: it is alive */
     } else {
@@ -611,6 +695,13 @@ static void diag_connect_failed(st67w611_status_t st, uint32_t seq0)
         }
     }
 
+#if SPLC_HOST_WIFI_SMART_RESET
+    s_smart_valid      = true;
+    s_smart_counted    = !refused;
+    s_smart_has_reason = got_reason;
+    s_smart_code       = got_reason ? code : 0U;
+    s_smart_cfg        = got_reason && smart_is_config_reason(code);
+#endif
     if (cls == FAIL_ENV) {
         s_diag_env++;
         s_diag_module_streak = 0U;
@@ -650,6 +741,9 @@ static void do_connect(void)
 #if SPLC_HOST_WIFI_DIAG
     uint32_t reason_seq0 = st67w611_wifi_reason_get(NULL);
 #endif
+#if SPLC_HOST_WIFI_SMART_RESET
+    const uint32_t connect_t0 = now_ms();
+#endif
     /* This call blocks up to ~80 s in the worst case (see SPLC_WDG_WIFI_CONNECT_GRACE_MS). */
     plc_wdt_grace(SPLC_WDT_CH_NET, SPLC_WDG_WIFI_CONNECT_GRACE_MS);
     const st67w611_status_t st = meshwf_st67_wifi_switch(cfg.ssid, cfg.password);
@@ -660,7 +754,12 @@ static void do_connect(void)
         s_diag_module_streak = 0U;
 #endif
     } else {
+#if SPLC_HOST_WIFI_SMART_RESET
+        log_warn(TAG, "connect to \"%s\" failed: %s (after %lu ms)", cfg.ssid, st67w611_status_string(st),
+                 (unsigned long)(now_ms() - connect_t0));
+#else
         log_warn(TAG, "connect to \"%s\" failed: %s", cfg.ssid, st67w611_status_string(st));
+#endif
         live_set(PLC_WIFI_CONN_DISCONNECTED, PLC_WIFI_ERR_DRIVER, 0U);
 #if SPLC_HOST_WIFI_DIAG
         diag_connect_failed(st, reason_seq0);
@@ -1011,6 +1110,77 @@ static void default_service(uint32_t now)
     if (s_default_next_ms == 0U) { s_default_next_ms = 1U; }
 }
 
+#if SPLC_HOST_WIFI_SMART_RESET
+/* Smart-reconnect state, worker only. See SPLC_HOST_WIFI_SMART_RESET. */
+static uint16_t s_smart_fails;         /* module-side failures in a row */
+static uint32_t s_smart_last_reset_ms; /* time of the last smart reset, 0 = none in this outage */
+static uint32_t s_smart_gap_ms = SPLC_HOST_WIFI_SMART_GAP_MS;
+static uint16_t s_smart_resets;        /* smart resets done in this outage */
+static bool     s_smart_cfg_logged;    /* the "check SSID / password" line is printed once per outage */
+
+static void smart_clear(void)
+{
+    s_smart_fails         = 0U;
+    s_smart_last_reset_ms = 0U;
+    s_smart_gap_ms        = SPLC_HOST_WIFI_SMART_GAP_MS;
+    s_smart_resets        = 0U;
+    s_smart_cfg_logged    = false;
+    s_smart_valid         = false;
+}
+
+/* Worker only, right after a FAILED reconnect (reconnect_check, nothing else running). */
+static void smart_note_failure(void)
+{
+    if (!s_smart_valid || !s_smart_counted) {
+        return;                                /* refused before the module: nothing was learned */
+    }
+    if (s_smart_cfg) {
+        s_smart_fails = 0U;                    /* the user must fix it: no reset, keep retrying */
+        if (!s_smart_cfg_logged) {
+            s_smart_cfg_logged = true;
+            log_info(TAG, "reason %s(%u) points to the SSID / password: no ST67 reset, retrying every %lu s",
+                     st67w611_wifi_reason_string(s_smart_code), (unsigned)s_smart_code,
+                     (unsigned long)(SPLC_HOST_WIFI_SMART_PERIOD_MS / 1000U));
+        }
+        return;
+    }
+    s_smart_cfg_logged = false;
+    if (s_smart_fails < 0xFFFFU) {
+        s_smart_fails++;
+    }
+    if (s_smart_fails < (uint16_t)SPLC_HOST_WIFI_SMART_RETRIES) {
+        return;
+    }
+    const uint32_t now = now_ms();
+    if (s_smart_last_reset_ms != 0U && (uint32_t)(now - s_smart_last_reset_ms) < s_smart_gap_ms) {
+        return;                                /* a smart reset was done a moment ago */
+    }
+    if (s_connecting || s_cmd != 0U || s_scan_state == PLC_WIFI_SCAN_SCANNING) {
+        return;                                /* the App is doing something: judge again next time */
+    }
+
+    char why[80];
+    (void)snprintf(why, sizeof(why), "smart: %u failed connects, reason %s(%u)",
+                   (unsigned)s_smart_fails,
+                   s_smart_has_reason ? st67w611_wifi_reason_string(s_smart_code) : "none",
+                   (unsigned)s_smart_code);
+    if (!module_reset_now(why)) {
+        return;                                /* gated by MIN_MS, or the reset failed (logged there) */
+    }
+
+    s_smart_resets++;
+    s_smart_fails         = 0U;
+    s_smart_last_reset_ms = now_ms();
+    if (s_smart_last_reset_ms == 0U) { s_smart_last_reset_ms = 1U; }
+    const uint32_t this_gap = s_smart_gap_ms;
+    s_smart_gap_ms = (this_gap > (SPLC_HOST_WIFI_SMART_GAP_MAX_MS / 2U)) ? SPLC_HOST_WIFI_SMART_GAP_MAX_MS
+                                                                          : (this_gap * 2U);
+    log_info(TAG, "smart reset #%u done: the next one needs %u more failed connects and %lu s",
+             (unsigned)s_smart_resets, (unsigned)SPLC_HOST_WIFI_SMART_RETRIES,
+             (unsigned long)(s_smart_gap_ms / 1000U));
+}
+#endif /* SPLC_HOST_WIFI_SMART_RESET */
+
 #if SPLC_HOST_WIFI_RECONNECT
 /* Worker only, from the idle link check, right after refresh_link(). Brings the App's network
  * back when it is lost. Does nothing while the App does not want the link (s_want_link), while
@@ -1020,11 +1190,14 @@ static void reconnect_check(uint32_t now)
 {
     if (s_recon_rearm) {                       /* a new CONNECT from the App: start from scratch */
         s_recon_rearm    = false;
-        s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+        s_recon_pause_ms = SPLC_RECON_BASE_MS;
         s_recon_next_ms  = 0U;
         s_down_since_ms  = 0U;
         s_fail_streak    = 0U;
         s_noip_since_ms  = 0U;
+#if SPLC_HOST_WIFI_SMART_RESET
+        smart_clear();
+#endif
     }
 
     taskENTER_CRITICAL();
@@ -1035,6 +1208,9 @@ static void reconnect_check(uint32_t now)
         s_down_since_ms = 0U;                  /* nothing is expected: no outage to measure */
         s_fail_streak   = 0U;
         s_noip_since_ms = 0U;
+#if SPLC_HOST_WIFI_SMART_RESET
+        smart_clear();
+#endif
         return;
     }
 
@@ -1047,8 +1223,11 @@ static void reconnect_check(uint32_t now)
         s_down_since_ms  = 0U;
         s_fail_streak    = 0U;
         s_noip_since_ms  = 0U;
-        s_recon_pause_ms = SPLC_HOST_WIFI_RECONNECT_MS;
+        s_recon_pause_ms = SPLC_RECON_BASE_MS;
         s_recon_next_ms  = 0U;
+#if SPLC_HOST_WIFI_SMART_RESET
+        smart_clear();
+#endif
         return;
     }
 
@@ -1115,6 +1294,9 @@ static void reconnect_check(uint32_t now)
 
     log_info(TAG, "Wi-Fi down for %lu s (%u failed reconnect(s)): reconnecting to \"%s\"",
              (unsigned long)((now - s_down_since_ms) / 1000U), (unsigned)s_fail_streak, ssid);
+#if SPLC_HOST_WIFI_SMART_RESET
+    s_smart_valid = false;                     /* set again by diag_connect_failed if this one fails */
+#endif
     do_connect();                              /* clears s_connecting when it finishes */
 
     taskENTER_CRITICAL();
@@ -1129,6 +1311,10 @@ static void reconnect_check(uint32_t now)
         if (s_fail_streak < 0xFFFFU) {
             s_fail_streak++;
         }
+#if SPLC_HOST_WIFI_SMART_RESET
+        smart_note_failure();                  /* may soft-reset the module: READY then rejoins */
+        s_recon_next_ms = now_ms() + s_recon_pause_ms;   /* fixed period, no back-off */
+#else
         s_recon_next_ms = t + s_recon_pause_ms;
         if (s_recon_pause_ms < SPLC_HOST_WIFI_RECONNECT_MAX_MS) {     /* back off, capped */
             const uint32_t next = (s_recon_pause_ms > (SPLC_HOST_WIFI_RECONNECT_MAX_MS / 2U))
@@ -1136,6 +1322,7 @@ static void reconnect_check(uint32_t now)
                                       : (s_recon_pause_ms * 2U);
             s_recon_pause_ms = next;
         }
+#endif
     }
     if (s_recon_next_ms == 0U) { s_recon_next_ms = 1U; }
 }
